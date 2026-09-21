@@ -83,6 +83,39 @@ reporting query), replace free-form SQL with a fixed set of named, parameterized
 behind an authentication + authorization check, never a raw SQL string from the request
 body.
 
+**The auth gate itself must fail closed.** When the check depends on a secret read from
+config/environment (an admin token/API key), missing configuration must deny the request,
+never let it through. A gate that no-ops and lets the request proceed whenever the secret
+isn't set — even "temporarily, to keep an existing demo/collection working unchanged" —
+reproduces the exact same CRITICAL under a new name, because an unset env var is the
+out-of-the-box state most deployments start from (see `.env.example`/README defaults).
+
+```python
+# Anti-pattern: permissive no-op when the secret is unset
+def reset_database():
+    token = request.headers.get("X-Admin-Token")
+    if not settings.ADMIN_TOKEN:
+        logger.warning("ADMIN_TOKEN not set — allowing request unauthenticated")
+        return do_reset()          # falls through to the dangerous action
+    if token != settings.ADMIN_TOKEN:
+        return jsonify({"erro": "Não autorizado"}), 403
+    return do_reset()
+```
+
+```python
+# Fail closed: missing config disables the route instead of opening it
+def reset_database():
+    token = request.headers.get("X-Admin-Token")
+    if not settings.ADMIN_TOKEN or token != settings.ADMIN_TOKEN:
+        return jsonify({"erro": "Não autorizado"}), 403   # 403 either way
+    return do_reset()
+```
+
+If gating the route breaks an existing demo/collection request that never sent
+credentials (e.g. `api.http`), that's the finding surfacing through the demo, not a
+reason to leave the route open — update the demo request and document the new
+credential requirement (`.env.example`, README) instead of loosening the gate.
+
 ## 5. Business Logic in Controllers/Routes → extract into the controller/service layer
 
 **Before** (route handler doing validation, persistence, and notification fan-out inline):

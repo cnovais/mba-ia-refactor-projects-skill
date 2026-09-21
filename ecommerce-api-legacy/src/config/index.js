@@ -31,8 +31,9 @@ const config = {
     dbPass: readEnv('DB_PASS', 'dev_password_change_me'),
     paymentGatewayKey: readEnv('PAYMENT_GATEWAY_KEY', 'pk_test_dev_placeholder'),
     smtpUser: process.env.SMTP_USER || 'no-reply@example.com',
-    // Left unset by default so the admin routes stay open for the demo
-    // requests in api.http; set it to require the x-admin-api-key header.
+    // Unset by default => adminAuth fails closed and disables the admin
+    // routes (403). Set it to enable them, requiring the x-admin-api-key
+    // header to match.
     adminApiKey: process.env.ADMIN_API_KEY || null,
 };
 
