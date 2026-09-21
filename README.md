@@ -698,3 +698,22 @@ curl http://localhost:5000/tasks
 
 3. **Checar que nenhum segredo continua hardcoded** — `grep -rn "SECRET_KEY\s*=\s*['\"]" .` e equivalentes não devem mais retornar literais no código-fonte de nenhum dos três projetos, só leitura de variável de ambiente (ver `config/settings.py` / `src/config/index.js` e os respectivos `.env.example`).
 4. **Rodar de novo a Fase 2 (auditoria) sobre o código já refatorado** é a forma mais direta de confirmar que os findings da rodada anterior não aparecem mais — os relatórios em `reports/` já documentam esse re-scan feito pela própria skill ao final da Fase 3, projeto a projeto.
+
+## Correção pós-entrega — 2026-09-20
+
+Recebi um comentário de revisão apontando que o `adminAuth` do `ecommerce-api-legacy`
+liberava `GET /api/admin/financial-report` e `DELETE /api/users/:id` sem nenhuma
+checagem quando `ADMIN_API_KEY` não estava definida — exatamente o estado padrão
+deixado pelo `.env.example` e pelo passo a passo deste README — fazendo o CRITICAL
+"Unauthenticated Admin/Destructive Endpoints" do `reports/audit-project-2.md`
+continuar reproduzível no cenário padrão, apesar de o relatório original descrever
+isso como "mitigado".
+
+O comentário estava correto e já foi corrigido nesta entrega: o gate agora falha
+fechado (sem `ADMIN_API_KEY`, as rotas respondem `403` em vez de abrir), no mesmo
+padrão já usado pelo `/admin/reset-db` do `code-smells-project`. O playbook da skill
+(`05-refactoring-playbook.md`, item 4) foi atualizado nas 3 cópias com essa regra
+explícita, para não regredir em execuções futuras. Detalhes completos, evidência de
+validação (curl) e o antes/depois do middleware estão na seção "Desafios encontrados"
+acima e na seção "Correção — 2026-09-20" de [`reports/audit-project-2.md`](./reports/audit-project-2.md).
+PR: [#1](https://github.com/cnovais/mba-ia-refactor-projects-skill/pull/1).
