@@ -5,17 +5,16 @@ const { config } = require('../config');
 /**
  * Gates admin/destructive routes behind a shared API key.
  *
- * Left permissive (a no-op, with a warning) when ADMIN_API_KEY isn't
- * configured, so the existing demo requests in api.http keep working
- * unchanged out of the box — see the audit report's deferred-items note.
- * Set ADMIN_API_KEY before exposing this API beyond local development.
+ * Fails closed when ADMIN_API_KEY isn't configured: the route is disabled
+ * (403) instead of left open, mirroring the /admin/reset-db gate in
+ * code-smells-project. Set ADMIN_API_KEY to actually enable these routes.
  */
 function adminAuth(req, res, next) {
     if (!config.adminApiKey) {
         console.warn(
-            `[SECURITY] ADMIN_API_KEY não configurada — ${req.method} ${req.originalUrl} está aberta sem autenticação.`
+            `[SECURITY] ADMIN_API_KEY não configurada — ${req.method} ${req.originalUrl} está desabilitada.`
         );
-        return next();
+        return res.status(403).json({ error: 'Endpoint administrativo desabilitado: ADMIN_API_KEY não configurada' });
     }
 
     const providedKey = req.get('x-admin-api-key');

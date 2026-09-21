@@ -162,3 +162,31 @@ Fase 2 foram resolvidos, com uma ressalva documentada abaixo:
   `api.http` (que não enviam nenhuma credencial). Recomendação: definir
   `ADMIN_API_KEY` (ou um mecanismo de auth mais robusto) em qualquer ambiente
   real antes de expor a API além do desenvolvimento local.
+
+### Correção — 2026-09-20
+
+A ressalva acima estava errada: um gate de auth que abre a rota quando a
+configuração está ausente **não é mitigação, é o mesmo CRITICAL sob outro
+nome** — `ADMIN_API_KEY` indefinida é exatamente o estado padrão deixado
+pelo `.env.example` e pelo passo a passo do README, então `GET
+/api/admin/financial-report` e `DELETE /api/users/:id` continuavam
+publicamente acessíveis no cenário de instalação padrão, sem exigir nenhuma
+credencial. O `adminAuth` (`src/middlewares/adminAuth.js`) foi corrigido para
+falhar fechado — sem `ADMIN_API_KEY` configurada as duas rotas respondem
+`403` (desabilitadas) em vez de deixar a requisição passar — no mesmo padrão
+já usado pelo `/admin/reset-db` do `code-smells-project`
+(`controllers/admin_controller.py`). `.env.example`, `README.md` e
+`api.http` do projeto foram atualizados para refletir que `ADMIN_API_KEY` é
+agora obrigatória para usar essas rotas. Revalidado via curl:
+
+- Sem `ADMIN_API_KEY` no ambiente: `GET /api/admin/financial-report` → 403,
+  `DELETE /api/users/1` → 403 (antes: 200 sem nenhuma credencial).
+- Com `ADMIN_API_KEY` definida: sem header ou header errado → 401; header
+  correto → 200 (checkout, o único endpoint não-admin, segue respondendo
+  normalmente e sem exigir a chave).
+
+O finding CRITICAL "Unauthenticated Admin/Destructive Endpoints" está agora
+**fechado por padrão**, não apenas mitigado. O playbook da skill
+(`05-refactoring-playbook.md`, item 4, nos três projetos) foi atualizado com
+essa regra — auth gate dependente de config ausente deve negar, nunca
+liberar — para evitar a mesma regressão em futuras execuções.

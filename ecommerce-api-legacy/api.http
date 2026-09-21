@@ -1,4 +1,5 @@
 @baseUrl = http://localhost:3000
+@adminApiKey = set-me-to-match-ADMIN_API_KEY-in-.env
 
 ### Checkout - sucesso
 POST {{baseUrl}}/api/checkout
@@ -25,7 +26,12 @@ Content-Type: application/json
 }
 
 ### Relatório financeiro administrativo
+# Requer ADMIN_API_KEY definida no .env do servidor (fail-closed por padrão:
+# sem ela configurada, a rota responde 403 mesmo com o header abaixo).
 GET {{baseUrl}}/api/admin/financial-report
+x-admin-api-key: {{adminApiKey}}
 
 ### Deletar usuário
+# Idem: requer ADMIN_API_KEY definida no .env do servidor.
 DELETE {{baseUrl}}/api/users/1
+x-admin-api-key: {{adminApiKey}}
