@@ -111,6 +111,36 @@ def reset_database():
     return do_reset()
 ```
 
+The same rule applies to gates written as middleware (Express, Koa, FastAPI dependencies,
+etc.) — the anti-pattern there is calling `next()` when the secret is unset:
+
+```js
+// Anti-pattern: "opt-in" middleware — open by default, exactly the .env.example state
+function adminAuth(req, res, next) {
+    if (!config.adminToken) {
+        console.warn('[SECURITY] ADMIN_TOKEN not set — route left open');
+        return next();                              // falls through to the protected route
+    }
+    if (req.get('x-admin-token') !== config.adminToken) {
+        return res.status(401).json({ error: 'Não autorizado' });
+    }
+    return next();
+}
+```
+
+```js
+// Fail closed: missing config denies, same as the Python example above
+function adminAuth(req, res, next) {
+    if (!config.adminToken || req.get('x-admin-token') !== config.adminToken) {
+        return res.status(403).json({ error: 'Não autorizado' });
+    }
+    return next();
+}
+```
+
+Don't trust reading the gate — prove it: Phase 3 validation (SKILL.md) boots the app with
+the secret unset and requires 401/403 on every protected route called without credentials.
+
 If gating the route breaks an existing demo/collection request that never sent
 credentials (e.g. `api.http`), that's the finding surfacing through the demo, not a
 reason to leave the route open — update the demo request and document the new
