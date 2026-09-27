@@ -133,6 +133,12 @@ breaking anything that currently works.
      errors (check the process output/logs, not just "the file has no syntax errors").
    - Exercise the original endpoints (curl, the project's `.http` file, or equivalent) and
      confirm each still responds with the expected status/shape.
+   - For every auth/authorization gate the refactor added or touched (admin key, token,
+     role check), start the app **without** the secret configured — the out-of-the-box
+     state of `.env.example`/README — and call each protected route with no credentials.
+     It must be denied (401/403), never served. A gate that opens when its config is
+     missing reproduces the original CRITICAL (see "The auth gate itself must fail
+     closed" in the playbook); fix it before moving on.
    - Re-scan against the anti-pattern catalog and confirm the findings from Phase 2 are
      resolved (or explicitly note any that were deliberately deferred and why).
    - Stop the server process you started for validation once checks pass.

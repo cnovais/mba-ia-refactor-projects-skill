@@ -1,21 +1,13 @@
-'use strict';
+module.exports = function paymentModel(db) {
+    return {
+        create(enrollmentId, amount, status) {
+            return db.run('INSERT INTO payments (enrollment_id, amount, status) VALUES (?, ?, ?)', [enrollmentId, amount, status]);
+        },
 
-class PaymentModel {
-    constructor(db) {
-        this.db = db;
-    }
-
-    async create({ enrollmentId, amount, status }) {
-        const { lastID } = await this.db.run(
-            'INSERT INTO payments (enrollment_id, amount, status) VALUES (?, ?, ?)',
-            [enrollmentId, amount, status]
-        );
-        return { id: lastID, enrollmentId, amount, status };
-    }
-
-    findByEnrollmentId(enrollmentId) {
-        return this.db.get('SELECT * FROM payments WHERE enrollment_id = ?', [enrollmentId]);
-    }
-}
-
-module.exports = { PaymentModel };
+        deleteByEnrollmentIds(enrollmentIds) {
+            if (enrollmentIds.length === 0) return Promise.resolve({ changes: 0 });
+            const placeholders = enrollmentIds.map(() => '?').join(',');
+            return db.run(`DELETE FROM payments WHERE enrollment_id IN (${placeholders})`, enrollmentIds);
+        },
+    };
+};

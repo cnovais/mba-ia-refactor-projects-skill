@@ -580,13 +580,12 @@ models.py                      models/{produto,usuario,pedido}_model.py
 Antes                          Depois (dentro de src/)
 src/app.js                     app.js
 src/AppManager.js              config/index.js
-src/utils.js                   db/{connection,schema,seed}.js
-                                models/{user,course,enrollment,payment,auditLog,financialReport}Model.js
+src/utils.js                   db/connection.js
+                                models/{user,course,enrollment,payment,auditLog,report}Model.js
                                 controllers/{checkout,financialReport,user}Controller.js
-                                routes/{checkout,financialReport,user}Routes.js + index.js
-                                services/{passwordService,paymentGatewayService}.js
-                                middlewares/{adminAuth,errorHandler}.js
-                                utils/{asyncHandler,cache}.js
+                                routes/{checkout,financialReport,user}Routes.js
+                                middlewares/{adminAuth,asyncHandler,errorHandler}.js
+                                utils/{cache,password,paymentGateway}.js
 ```
 
 **Projeto 3 — task-manager-api**
@@ -717,3 +716,26 @@ explícita, para não regredir em execuções futuras. Detalhes completos, evid�
 validação (curl) e o antes/depois do middleware estão na seção "Desafios encontrados"
 acima e na seção "Correção — 2026-09-20" de [`reports/audit-project-2.md`](./reports/audit-project-2.md).
 PR: [#1](https://github.com/cnovais/mba-ia-refactor-projects-skill/pull/1).
+
+## Correção pós-entrega (2ª revisão) — 2026-09-27
+
+A segunda revisão repetiu o mesmo apontamento e pediu explicitamente para **ajustar o
+playbook e rodar a skill de novo** nesse projeto, já que a primeira correção tinha sido
+um patch manual no código já refatorado. Desta vez:
+
+1. **Skill reforçada (3 cópias, idênticas):** além da regra de fail-closed no playbook
+   (`05-refactoring-playbook.md`, item 4), o passo de validação da Fase 3 no `SKILL.md`
+   agora obriga a subir a aplicação **sem** o secret de auth configurado (estado padrão do
+   `.env.example`) e chamar cada rota protegida sem credencial, que precisa ser negada
+   (401/403). O `06-validation-checklist.md` ganhou o item *"Gates de autenticação falham
+   fechados sem o secret configurado (401/403, testado em runtime)"*, que só pode ser
+   marcado depois do teste em runtime.
+2. **Skill executada do zero:** o `ecommerce-api-legacy` foi restaurado ao código legado
+   original (commit inicial), a skill atualizada rodou as 3 fases (com o gate de
+   confirmação respondido antes da Fase 3), e o resultado substituiu o código do projeto e
+   o [`reports/audit-project-2.md`](./reports/audit-project-2.md). A variável agora se
+   chama `ADMIN_TOKEN` (header `x-admin-token`), como a skill gerou.
+3. **Revalidação independente (curl):**
+   - Sem `ADMIN_TOKEN`: `GET /api/admin/financial-report` → 403, `DELETE /api/users/1` → 403
+     (também com header vazio); `POST /api/checkout` → 200.
+   - Com `ADMIN_TOKEN` definido: sem header ou com header errado → 403; header correto → 200 nas duas rotas.

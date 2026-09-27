@@ -1,60 +1,55 @@
-'use strict';
-
 const sqlite3 = require('sqlite3').verbose();
 
-function run(rawDb, sql, params = []) {
-    return new Promise((resolve, reject) => {
-        rawDb.run(sql, params, function callback(err) {
-            if (err) return reject(err);
-            resolve({ lastID: this.lastID, changes: this.changes });
-        });
-    });
-}
+function createDb(dbPath) {
+    const raw = new sqlite3.Database(dbPath);
 
-function get(rawDb, sql, params = []) {
-    return new Promise((resolve, reject) => {
-        rawDb.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
-    });
-}
-
-function all(rawDb, sql, params = []) {
-    return new Promise((resolve, reject) => {
-        rawDb.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
-    });
-}
-
-/**
- * Thin promise-based wrapper around the callback-style `sqlite3` driver.
- * Models receive an instance of this via constructor injection instead of
- * reaching for a module-level/global connection — swap in a different
- * implementation (or a test double) without touching model code.
- */
-class Database {
-    constructor(rawDb) {
-        this.raw = rawDb;
-    }
-
-    run(sql, params) {
-        return run(this.raw, sql, params);
-    }
-
-    get(sql, params) {
-        return get(this.raw, sql, params);
-    }
-
-    all(sql, params) {
-        return all(this.raw, sql, params);
-    }
-
-    close() {
+    function run(sql, params = []) {
         return new Promise((resolve, reject) => {
-            this.raw.close((err) => (err ? reject(err) : resolve()));
+            raw.run(sql, params, function callback(err) {
+                if (err) return reject(err);
+                resolve({ lastID: this.lastID, changes: this.changes });
+            });
         });
     }
+
+    function get(sql, params = []) {
+        return new Promise((resolve, reject) => {
+            raw.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
+        });
+    }
+
+    function all(sql, params = []) {
+        return new Promise((resolve, reject) => {
+            raw.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
+        });
+    }
+
+    async function initDb() {
+        await run('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, pass TEXT)');
+        await run('CREATE TABLE courses (id INTEGER PRIMARY KEY, title TEXT, price REAL, active INTEGER)');
+        await run('CREATE TABLE enrollments (id INTEGER PRIMARY KEY, user_id INTEGER, course_id INTEGER)');
+        await run('CREATE TABLE payments (id INTEGER PRIMARY KEY, enrollment_id INTEGER, amount REAL, status TEXT)');
+        await run('CREATE TABLE audit_logs (id INTEGER PRIMARY KEY, action TEXT, created_at DATETIME)');
+
+        const { lastID: userId } = await run(
+            'INSERT INTO users (name, email, pass) VALUES (?, ?, ?)',
+            ['Leonan', 'leonan@fullcycle.com.br', '123']
+        );
+        await run(
+            'INSERT INTO courses (title, price, active) VALUES (?, ?, 1), (?, ?, 1)',
+            ['Clean Architecture', 997.0, 'Docker', 497.0]
+        );
+        const { lastID: enrollmentId } = await run(
+            'INSERT INTO enrollments (user_id, course_id) VALUES (?, ?)',
+            [userId, 1]
+        );
+        await run(
+            'INSERT INTO payments (enrollment_id, amount, status) VALUES (?, ?, ?)',
+            [enrollmentId, 997.0, 'PAID']
+        );
+    }
+
+    return { run, get, all, initDb };
 }
 
-function createDatabase(dbPath) {
-    return new Database(new sqlite3.Database(dbPath));
-}
-
-module.exports = { Database, createDatabase };
+module.exports = createDb;
