@@ -1,11 +1,8 @@
-'use strict';
+const express = require('express');
+const asyncHandler = require('../middlewares/asyncHandler');
 
-const { Router } = require('express');
-
-function checkoutRoutes(checkoutController) {
-    const router = Router();
-    router.post('/checkout', checkoutController.checkout);
+module.exports = function checkoutRoutes(checkout) {
+    const router = express.Router();
+    router.post('/checkout', asyncHandler(checkout));
     return router;
-}
-
-module.exports = { checkoutRoutes };
+};

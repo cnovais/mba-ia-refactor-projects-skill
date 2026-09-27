@@ -1,30 +1,19 @@
-'use strict';
+module.exports = function userModel(db) {
+    return {
+        findByEmail(email) {
+            return db.get('SELECT id, name, email FROM users WHERE email = ?', [email]);
+        },
 
-class UserModel {
-    constructor(db) {
-        this.db = db;
-    }
+        findById(id) {
+            return db.get('SELECT id, name, email FROM users WHERE id = ?', [id]);
+        },
 
-    findByEmail(email) {
-        return this.db.get('SELECT * FROM users WHERE email = ?', [email]);
-    }
+        create({ name, email, passwordHash }) {
+            return db.run('INSERT INTO users (name, email, pass) VALUES (?, ?, ?)', [name, email, passwordHash]);
+        },
 
-    findById(id) {
-        return this.db.get('SELECT * FROM users WHERE id = ?', [id]);
-    }
-
-    async create({ name, email, passwordHash }) {
-        const { lastID } = await this.db.run(
-            'INSERT INTO users (name, email, pass) VALUES (?, ?, ?)',
-            [name, email, passwordHash]
-        );
-        return this.findById(lastID);
-    }
-
-    async deleteById(id) {
-        const { changes } = await this.db.run('DELETE FROM users WHERE id = ?', [id]);
-        return changes > 0;
-    }
-}
-
-module.exports = { UserModel };
+        deleteById(id) {
+            return db.run('DELETE FROM users WHERE id = ?', [id]);
+        },
+    };
+};

@@ -1,24 +1,21 @@
-'use strict';
-
-const { asyncHandler } = require('../utils/asyncHandler');
-
-function makeUserController({ userModel }) {
+module.exports = function userController({ userModel, enrollmentModel, paymentModel }) {
     return {
-        remove: asyncHandler(async (req, res) => {
-            const { id } = req.params;
-            const deleted = await userModel.deleteById(id);
-
-            if (!deleted) {
-                return res.status(404).send('Usuário não encontrado');
+        async deleteUser(req, res) {
+            const id = Number(req.params.id);
+            if (!Number.isInteger(id) || id <= 0) {
+                return res.status(400).json({ error: 'id inválido' });
             }
 
-            // Note: preserved from the legacy behavior — deleting a user
-            // does not cascade to their enrollments/payments. Flagged in
-            // the audit report; left as-is here to avoid changing the
-            // response contract for a well-formed delete request.
-            res.send('Usuário deletado, mas as matrículas e pagamentos ficaram sujos no banco.');
-        }),
-    };
-}
+            // Cascade the delete instead of leaving orphaned enrollments/payments behind.
+            const enrollments = await enrollmentModel.findByUserId(id);
+            const enrollmentIds = enrollments.map((enrollment) => enrollment.id);
+            await paymentModel.deleteByEnrollmentIds(enrollmentIds);
+            await enrollmentModel.deleteByUserId(id);
+            const { changes } = await userModel.deleteById(id);
 
-module.exports = { makeUserController };
+            if (changes === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
+
+            res.json({ message: 'Usuário e dados relacionados removidos com sucesso' });
+        },
+    };
+};

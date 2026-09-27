@@ -1,12 +1,8 @@
-'use strict';
+const express = require('express');
+const asyncHandler = require('../middlewares/asyncHandler');
 
-const { Router } = require('express');
-const { adminAuth } = require('../middlewares/adminAuth');
-
-function financialReportRoutes(financialReportController) {
-    const router = Router();
-    router.get('/admin/financial-report', adminAuth, financialReportController.get);
+module.exports = function financialReportRoutes(getFinancialReport) {
+    const router = express.Router();
+    router.get('/financial-report', asyncHandler(getFinancialReport));
     return router;
-}
-
-module.exports = { financialReportRoutes };
+};

@@ -38,6 +38,7 @@ Use this exact structure:
 - [ ] Entry point claro
 - [ ] Aplicação inicia sem erros
 - [ ] Endpoints originais respondem corretamente
+- [ ] Gates de autenticação falham fechados sem o secret configurado (401/403, testado em runtime)
 ```
 
 ## How to fill each box honestly
@@ -69,6 +70,13 @@ actually happened is worse than no checklist.
   was declined by the human (the confirmation gate answered "no"), leave the whole Fase 3
   section unchecked and add a one-line note explaining why ("Fase 3 não executada — humano
   optou por não prosseguir"), instead of deleting the section.
+  - "Gates de autenticação falham fechados sem o secret configurado" — check it only after
+    booting the app with the auth secret (admin key/token) **unset**, exactly as
+    `.env.example` ships it, and seeing every protected route return 401/403 without
+    credentials. Reading the middleware code is not enough — run the request. If the
+    project has no auth gate at all (none existed and the refactor added none), mark it
+    `[x]` with "(N/A — nenhum gate de autenticação no projeto)".
+
 
 ## Appending to the report file
 
