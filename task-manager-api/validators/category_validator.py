@@ -1,29 +1,39 @@
-from utils.helpers import DEFAULT_COLOR, is_valid_color
+import re
+
+from errors import ValidationError
+from models.category import DEFAULT_COLOR
+from validators.common import require_body
+
+COLOR_PATTERN = re.compile(r'^#[0-9a-fA-F]{6}$')
 
 
-def validate_category_payload(data, partial=False):
-    """Returns (cleaned_data, error_message); error_message is None on success."""
-    cleaned = {}
+def _validate_name(name):
+    if not name or not isinstance(name, str):
+        raise ValidationError('Nome é obrigatório')
 
+
+def _validate_color(color):
+    if not isinstance(color, str) or not COLOR_PATTERN.match(color):
+        raise ValidationError('Cor inválida. Use o formato #RRGGBB')
+
+
+def validate_category_create(data):
+    require_body(data)
+    _validate_name(data.get('name'))
+    color = data.get('color', DEFAULT_COLOR)
+    _validate_color(color)
+    return {'name': data['name'], 'description': data.get('description', ''), 'color': color}
+
+
+def validate_category_update(data):
+    require_body(data)
+    changes = {}
     if 'name' in data:
-        name = data['name']
-        if not name:
-            return None, 'Nome é obrigatório'
-        cleaned['name'] = name
-    elif not partial:
-        return None, 'Nome é obrigatório'
-
+        _validate_name(data['name'])
+        changes['name'] = data['name']
     if 'description' in data:
-        cleaned['description'] = data['description']
-    elif not partial:
-        cleaned['description'] = ''
-
+        changes['description'] = data['description']
     if 'color' in data:
-        color = data['color']
-        if color and not is_valid_color(color):
-            return None, 'Cor inválida. Use o formato hexadecimal, ex: #3498db'
-        cleaned['color'] = color or DEFAULT_COLOR
-    elif not partial:
-        cleaned['color'] = DEFAULT_COLOR
-
-    return cleaned, None
+        _validate_color(data['color'])
+        changes['color'] = data['color']
+    return changes

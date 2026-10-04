@@ -1,10 +1,39 @@
-const port = Number(process.env.PORT) || 3000;
-const dbPath = process.env.DB_PATH || ':memory:';
-const paymentGatewayKey = process.env.PAYMENT_GATEWAY_KEY || null;
-const adminToken = process.env.ADMIN_TOKEN || null;
+// Único módulo que lê process.env. Segredos não têm valor padrão no código.
 
-if (!adminToken) {
-    console.warn('ADMIN_TOKEN não configurado — rotas administrativas ficarão bloqueadas até que seja definido.');
+function readOptional(name) {
+    const value = process.env[name];
+    return value && value.trim() !== '' ? value.trim() : null;
 }
 
-module.exports = { port, dbPath, paymentGatewayKey, adminToken };
+function readRequired(name, hint) {
+    const value = readOptional(name);
+    if (!value) {
+        throw new Error(`Variável de ambiente ${name} é obrigatória. ${hint}`);
+    }
+    return value;
+}
+
+function readPort() {
+    const raw = readOptional('PORT');
+    if (raw === null) return 3000;
+    const port = Number(raw);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+        throw new Error(`PORT inválida: "${raw}"`);
+    }
+    return port;
+}
+
+function loadConfig() {
+    return {
+        port: readPort(),
+        dbPath: readOptional('DB_PATH') || ':memory:',
+        paymentGatewayKey: readRequired(
+            'PAYMENT_GATEWAY_KEY',
+            'Defina a chave do gateway de pagamento (veja .env.example).'
+        ),
+        // Opcional de propósito: sem ADMIN_TOKEN as rotas administrativas ficam bloqueadas (403).
+        adminToken: readOptional('ADMIN_TOKEN'),
+    };
+}
+
+module.exports = { loadConfig };

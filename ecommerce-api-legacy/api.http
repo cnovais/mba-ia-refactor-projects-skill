@@ -1,5 +1,6 @@
 @baseUrl = http://localhost:3000
-@adminToken = coloque_aqui_o_valor_de_ADMIN_TOKEN
+# Mesmo valor de ADMIN_TOKEN no .env
+@adminToken = cole-aqui-o-ADMIN_TOKEN
 
 ### Checkout - sucesso
 POST {{baseUrl}}/api/checkout
@@ -25,10 +26,22 @@ Content-Type: application/json
   "card": "5111222233334444"
 }
 
-### Relatório financeiro administrativo (requer x-admin-token)
+### Checkout - conta existente com senha errada (401)
+POST {{baseUrl}}/api/checkout
+Content-Type: application/json
+
+{
+  "usr": "Leonan",
+  "eml": "leonan@fullcycle.com.br",
+  "pwd": "senha-errada",
+  "c_id": 2,
+  "card": "4111222233334444"
+}
+
+### Relatório financeiro administrativo
 GET {{baseUrl}}/api/admin/financial-report
 x-admin-token: {{adminToken}}
 
-### Deletar usuário (requer x-admin-token)
+### Deletar usuário
 DELETE {{baseUrl}}/api/users/1
 x-admin-token: {{adminToken}}

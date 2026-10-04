@@ -1,11 +1,11 @@
-module.exports = function courseModel(db) {
-    return {
-        findActiveById(id) {
-            return db.get('SELECT * FROM courses WHERE id = ? AND active = 1', [id]);
-        },
+class CourseModel {
+    constructor(db) {
+        this.db = db;
+    }
 
-        findAll() {
-            return db.all('SELECT * FROM courses');
-        },
-    };
-};
+    findActiveById(id) {
+        return this.db.get('SELECT id, title, price, active FROM courses WHERE id = ? AND active = 1', [id]);
+    }
+}
+
+module.exports = { CourseModel };

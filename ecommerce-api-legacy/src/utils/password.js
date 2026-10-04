@@ -1,25 +1,28 @@
 const crypto = require('crypto');
+const { promisify } = require('util');
 
+const scrypt = promisify(crypto.scrypt);
+
+const SALT_BYTES = 16;
 const KEY_LENGTH = 64;
+const PREFIX = 'scrypt';
 
-function hashPassword(password) {
-    return new Promise((resolve, reject) => {
-        const salt = crypto.randomBytes(16).toString('hex');
-        crypto.scrypt(password, salt, KEY_LENGTH, (err, derivedKey) => {
-            if (err) return reject(err);
-            resolve(`${salt}:${derivedKey.toString('hex')}`);
-        });
-    });
+// Formato armazenado: "scrypt:<salt hex>:<hash hex>"
+async function hashPassword(password) {
+    const salt = crypto.randomBytes(SALT_BYTES);
+    const derived = await scrypt(password, salt, KEY_LENGTH);
+    return `${PREFIX}:${salt.toString('hex')}:${derived.toString('hex')}`;
 }
 
-function verifyPassword(password, stored) {
-    return new Promise((resolve, reject) => {
-        const [salt, key] = stored.split(':');
-        crypto.scrypt(password, salt, KEY_LENGTH, (err, derivedKey) => {
-            if (err) return reject(err);
-            resolve(crypto.timingSafeEqual(Buffer.from(key, 'hex'), derivedKey));
-        });
-    });
+async function verifyPassword(password, stored) {
+    if (typeof password !== 'string' || typeof stored !== 'string') return false;
+    const [prefix, saltHex, hashHex] = stored.split(':');
+    if (prefix !== PREFIX || !saltHex || !hashHex) return false;
+
+    const expected = Buffer.from(hashHex, 'hex');
+    if (expected.length !== KEY_LENGTH) return false;
+    const derived = await scrypt(password, Buffer.from(saltHex, 'hex'), KEY_LENGTH);
+    return crypto.timingSafeEqual(derived, expected);
 }
 
 module.exports = { hashPassword, verifyPassword };

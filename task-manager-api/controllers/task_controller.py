@@ -1,174 +1,82 @@
-"""Task use cases: validate input, talk to the models, shape the result. No SQL/ORM
-access happens outside this layer's calls into the models, and no HTTP concerns
-(request/response objects) live here — that stays in routes/task_routes.py."""
-import threading
+import logging
 
-from sqlalchemy.orm import joinedload
-
-import database
-from config import settings
-from database import db
-from errors import ApiError
+from errors import NotFoundError
 from models.category import Category
-from models.task import Task
+from models.task import STATUS_CANCELLED, STATUS_DONE, STATUS_IN_PROGRESS, STATUS_PENDING, Task
 from models.user import User
-from services.notification_service import NotificationService
-from utils.helpers import calculate_percentage, log_action, utc_now
-from validators.task_validator import validate_task_payload
+from utils.helpers import calculate_percentage, utcnow
+from validators.task_validator import parse_search_params, validate_task_create, validate_task_update
 
-# One service instance for the process, configured from env (see config/settings.py)
-# instead of the hardcoded SMTP credentials the audit flagged.
-_notification_service = NotificationService(
-    host=settings.SMTP_HOST,
-    port=settings.SMTP_PORT,
-    user=settings.SMTP_USER,
-    password=settings.SMTP_PASSWORD,
-)
+logger = logging.getLogger(__name__)
+
+
+def _get_task_or_404(task_id):
+    task = Task.get_by_id(task_id)
+    if not task:
+        raise NotFoundError('Task não encontrada')
+    return task
+
+
+def _ensure_references_exist(user_id, category_id):
+    if user_id and not User.get_by_id(user_id):
+        raise NotFoundError('Usuário não encontrado')
+    if category_id and not Category.get_by_id(category_id):
+        raise NotFoundError('Categoria não encontrada')
 
 
 def list_tasks():
-    tasks = Task.query.options(joinedload(Task.user), joinedload(Task.category)).all()
-    return [_serialize(task) for task in tasks]
+    now = utcnow()
+    return [task.to_detailed_dict(now) for task in Task.list_with_relations()]
 
 
 def get_task(task_id):
-    task = db.session.get(Task, task_id)
-    if not task:
-        raise ApiError('Task não encontrada', 404)
-    return _serialize(task)
+    task = _get_task_or_404(task_id)
+    data = task.to_dict()
+    data['overdue'] = task.is_overdue()
+    return data
 
 
 def create_task(data):
-    if not data:
-        raise ApiError('Dados inválidos')
-
-    cleaned, error = validate_task_payload(data, partial=False)
-    if error:
-        raise ApiError(error)
-
-    _ensure_references_exist(cleaned)
-
-    task = Task(**cleaned)
-    db.session.add(task)
-    database.save()
-    log_action('Task criada', f'{task.id} - {task.title}')
-
-    if task.user_id:
-        _notify_assignment_async(db.session.get(User, task.user_id), task)
-
-    return _serialize(task)
+    fields = validate_task_create(data)
+    _ensure_references_exist(fields['user_id'], fields['category_id'])
+    task = Task(**fields).save()
+    logger.info('Task criada: %s - %s', task.id, task.title)
+    return task.to_dict()
 
 
 def update_task(task_id, data):
-    task = db.session.get(Task, task_id)
-    if not task:
-        raise ApiError('Task não encontrada', 404)
-
-    if not data:
-        raise ApiError('Dados inválidos')
-
-    cleaned, error = validate_task_payload(data, partial=True)
-    if error:
-        raise ApiError(error)
-
-    _ensure_references_exist(cleaned)
-
-    for field, value in cleaned.items():
+    task = _get_task_or_404(task_id)
+    changes = validate_task_update(data)
+    _ensure_references_exist(changes.get('user_id'), changes.get('category_id'))
+    for field, value in changes.items():
         setattr(task, field, value)
-    task.updated_at = utc_now()
-
-    database.save()
-    log_action('Task atualizada', str(task.id))
-
-    if cleaned.get('user_id'):
-        _notify_assignment_async(db.session.get(User, cleaned['user_id']), task)
-
-    return _serialize(task)
+    task.updated_at = utcnow()
+    task.save()
+    logger.info('Task atualizada: %s', task.id)
+    return task.to_dict()
 
 
 def delete_task(task_id):
-    task = db.session.get(Task, task_id)
-    if not task:
-        raise ApiError('Task não encontrada', 404)
-
-    db.session.delete(task)
-    database.save()
-    log_action('Task deletada', str(task_id))
+    task = _get_task_or_404(task_id)
+    task.delete()
+    logger.info('Task deletada: %s', task_id)
+    return {'message': 'Task deletada com sucesso'}
 
 
-def search_tasks(query, status, priority, user_id):
-    tasks_query = Task.query.options(joinedload(Task.user), joinedload(Task.category))
-
-    if query:
-        tasks_query = tasks_query.filter(
-            db.or_(Task.title.like(f'%{query}%'), Task.description.like(f'%{query}%'))
-        )
-    if status:
-        tasks_query = tasks_query.filter(Task.status == status)
-    if priority:
-        tasks_query = tasks_query.filter(Task.priority == int(priority))
-    if user_id:
-        tasks_query = tasks_query.filter(Task.user_id == int(user_id))
-
-    return [_serialize(task) for task in tasks_query.all()]
+def search_tasks(args):
+    return [task.to_dict() for task in Task.search(**parse_search_params(args))]
 
 
-def get_stats():
-    total = Task.query.count()
-    pending = Task.query.filter_by(status='pending').count()
-    in_progress = Task.query.filter_by(status='in_progress').count()
-    done = Task.query.filter_by(status='done').count()
-    cancelled = Task.query.filter_by(status='cancelled').count()
-    overdue = Task.query.filter(
-        Task.due_date < utc_now(),
-        Task.status.notin_(['done', 'cancelled']),
-    ).count()
-
+def task_stats():
+    total = Task.count()
+    by_status = Task.count_by_status()
+    done = by_status.get(STATUS_DONE, 0)
     return {
         'total': total,
-        'pending': pending,
-        'in_progress': in_progress,
+        'pending': by_status.get(STATUS_PENDING, 0),
+        'in_progress': by_status.get(STATUS_IN_PROGRESS, 0),
         'done': done,
-        'cancelled': cancelled,
-        'overdue': overdue,
+        'cancelled': by_status.get(STATUS_CANCELLED, 0),
+        'overdue': Task.count_overdue(utcnow()),
         'completion_rate': calculate_percentage(done, total),
     }
-
-
-def _notify_assignment_async(user, task):
-    """Fire the "task assigned" email in a background thread so a slow/unreachable
-    SMTP server (there's no timeout in smtplib.SMTP by default) can't add latency to
-    the create/update request. Scalar values are read out of the ORM objects here,
-    on the request's own thread/session, and only plain values cross into the
-    background thread — see the NotificationService docstring for why."""
-    if not user:
-        return
-
-    kwargs = dict(
-        user_id=user.id,
-        user_email=user.email,
-        user_name=user.name,
-        task_id=task.id,
-        task_title=task.title,
-        task_priority=task.priority,
-        task_status=task.status,
-    )
-    threading.Thread(
-        target=_notification_service.notify_task_assigned,
-        kwargs=kwargs,
-        daemon=True,
-    ).start()
-
-
-def _ensure_references_exist(cleaned):
-    if cleaned.get('user_id') and not db.session.get(User, cleaned['user_id']):
-        raise ApiError('Usuário não encontrado', 404)
-    if cleaned.get('category_id') and not db.session.get(Category, cleaned['category_id']):
-        raise ApiError('Categoria não encontrada', 404)
-
-
-def _serialize(task):
-    data = task.to_dict()
-    data['user_name'] = task.user.name if task.user else None
-    data['category_name'] = task.category.name if task.category else None
-    return data

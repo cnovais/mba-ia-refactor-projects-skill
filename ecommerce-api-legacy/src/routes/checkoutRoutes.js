@@ -1,8 +1,10 @@
 const express = require('express');
-const asyncHandler = require('../middlewares/asyncHandler');
+const { asyncHandler } = require('../middlewares/asyncHandler');
 
-module.exports = function checkoutRoutes(checkout) {
+function checkoutRoutes(checkoutController) {
     const router = express.Router();
-    router.post('/checkout', asyncHandler(checkout));
+    router.post('/api/checkout', asyncHandler(checkoutController.checkout));
     return router;
-};
+}
+
+module.exports = { checkoutRoutes };

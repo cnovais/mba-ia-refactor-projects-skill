@@ -1,26 +1,25 @@
-"""Centralized error handling: one place that turns any exception raised by a
-controller into a consistent JSON response, instead of every route repeating its own
-try/except/print. See errors.ApiError for the "expected failure" case."""
 import logging
 
 from flask import jsonify
 from werkzeug.exceptions import HTTPException
 
-from errors import ApiError
+from database import db
+from errors import AppError
 
-logger = logging.getLogger("task_manager")
+logger = logging.getLogger(__name__)
 
 
 def register_error_handlers(app):
-    @app.errorhandler(ApiError)
-    def handle_api_error(err):
+    @app.errorhandler(AppError)
+    def handle_app_error(err):
         return jsonify({'error': err.message}), err.status_code
 
     @app.errorhandler(HTTPException)
-    def handle_http_exception(err):
+    def handle_http_error(err):
         return jsonify({'error': err.description}), err.code
 
     @app.errorhandler(Exception)
     def handle_unexpected_error(err):
-        logger.exception("Erro interno não tratado")
+        db.session.rollback()
+        logger.exception('Unhandled error')
         return jsonify({'error': 'Erro interno'}), 500

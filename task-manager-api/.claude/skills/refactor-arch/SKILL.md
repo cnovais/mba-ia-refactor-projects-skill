@@ -120,7 +120,9 @@ breaking anything that currently works.
    references what "partially organized" looks like. The playbook entries are written as
    independent recipes for this reason: apply only the ones a given project actually needs.
 3. **Work anti-pattern by anti-pattern**, using the matching playbook recipe: extract
-   config/secrets into a config module reading from environment variables, split god
+   config/secrets into a config module reading from environment variables (with **no**
+   literal fallback for any secret — see playbook #2), make every flow that takes a
+   credential verify it on every path (playbook #15), split god
    files into per-domain models and controllers, move routing into a dedicated
    views/routes layer, parameterize every SQL query, centralize error handling into
    middleware, replace deprecated APIs with their modern equivalent, etc.
@@ -139,6 +141,16 @@ breaking anything that currently works.
      It must be denied (401/403), never served. A gate that opens when its config is
      missing reproduces the original CRITICAL (see "The auth gate itself must fail
      closed" in the playbook); fix it before moving on.
+   - For every secret the config module reads (signing key, API key, DB password), grep for
+     a literal fallback and then start the app with that variable **unset**: it must
+     either refuse to boot with a clear error or log that it generated a random
+     per-process value — never run on a fixed string from source. A literal "dev" default
+     reproduces the original Hardcoded Credentials CRITICAL; fix it before moving on.
+   - For every flow that takes a credential (login, checkout/registration that accepts a
+     password for an existing account, token-protected routes), call it with a **wrong**
+     credential for an **existing** account and with a forged/garbage token: it must be
+     rejected (401/403) with no side effect (nothing created, charged, or issued), and
+     the correct credential must still succeed.
    - Re-scan against the anti-pattern catalog and confirm the findings from Phase 2 are
      resolved (or explicitly note any that were deliberately deferred and why).
    - Stop the server process you started for validation once checks pass.

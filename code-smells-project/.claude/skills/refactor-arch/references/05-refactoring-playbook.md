@@ -49,9 +49,42 @@ if not SECRET_KEY:
 from config import settings
 app.config["SECRET_KEY"] = settings.SECRET_KEY
 ```
-Add a `.env.example` documenting the required variables (with placeholder, never real
-values) so the config contract is discoverable without exposing a real secret. Never log
-or return a secret in an API response.
+**No fixed fallback — not even a "dev" default.** Apply the recommendation in full: when the
+variable is missing (or empty), the app must not fall back to any literal. Two acceptable
+behaviors, in order of preference:
+
+1. **Refuse to boot** with a clear error naming the variable (the snippet above). Use this
+   for anything that signs/encrypts data meant to outlive the process (session/token
+   signing keys, encryption keys) and for credentials to external services.
+2. **Generate a random value per process** and log a warning — only for a signing key whose
+   loss is harmless (tokens simply stop being valid after a restart), and only if the
+   project needs to boot with zero configuration:
+   ```python
+   import secrets, logging
+   SECRET_KEY = os.environ.get("SECRET_KEY") or None
+   if not SECRET_KEY:
+       SECRET_KEY = secrets.token_hex(32)
+       logging.warning("SECRET_KEY not set — using a random per-process key; tokens won't survive a restart")
+   ```
+   ```javascript
+   const jwtSecret = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex'); // + warn
+   ```
+
+Never this (it's the original finding with an extra step):
+```python
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-not-for-production")
+```
+```javascript
+const jwtSecret = process.env.JWT_SECRET || "dev-secret";
+```
+
+Add a `.env.example` documenting the required variables so the config contract is
+discoverable — leave secret values **empty** (`SECRET_KEY=`), with a comment on how to
+generate one (e.g. `python -c "import secrets; print(secrets.token_hex(32))"`), and have the
+config module treat an empty value as missing. A usable placeholder like `change-me` would
+be silently accepted by every install that copies the file unedited. If the project's
+README tells people to run the app, update it to say which variables must be set first.
+Never log or return a secret in an API response.
 
 ## 3. SQL Injection → parameterized queries everywhere
 
@@ -340,3 +373,40 @@ const row = await db.get(sql, params);
 Cross-check every match against the table in the anti-pattern catalog's deprecated-API
 section — the fix is always "the modern replacement" column for that row, applied
 consistently everywhere the old call appears, not just the first occurrence.
+
+## 15. Authentication Bypass / Credential Not Verified → verify on every path
+
+**Before** ("find or create" that trusts an existing account without the password):
+```javascript
+let user = await userModel.findByEmail(email);
+if (!user) {
+    user = await userModel.create({ name, email, passwordHash: await hashPassword(password) });
+}
+// existing user falls through here with the password never checked
+await processPayment(user, course, card);
+```
+
+**After:**
+```javascript
+let user = await userModel.findByEmail(email);
+if (user) {
+    const ok = await verifyPassword(password, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: 'Credenciais inválidas' });
+} else {
+    user = await userModel.create({ name, email, passwordHash: await hashPassword(password) });
+}
+await processPayment(user, course, card);
+```
+The same rule for every flow that takes a credential: the check runs on **every** branch
+that reaches the protected action, uses the constant-time verify of the hashing library
+(`bcrypt.compare`, `check_password_hash`, `crypto.timingSafeEqual` over scrypt output) and
+fails closed (`401`, no side effects — no payment, enrollment, or token issued before the
+check). Return the same generic error for "unknown account" and "wrong password" in a
+login so the response doesn't reveal which emails exist.
+
+Contract note: a well-formed request with the **correct** credential must keep the original
+status/shape. A request with a wrong credential for an existing account changing from
+success to `401` is the bug fix, not a contract break — document it in the README/`.http`
+file. If legacy rows store passwords in a format the new verify can't read (e.g. homemade
+"hash" from catalog #8), migrate them or force a reset; never skip the check for them.
+

@@ -9,8 +9,9 @@ report an anti-pattern you didn't actually verify with a file:line.
 ## Severity scale
 
 - **CRITICAL** — breaks correctness, exposes sensitive data, or fully collapses the
-  separation of responsibilities (e.g. hardcoded credentials, SQL injection, a God Class
-  mixing DB + business logic + routing in one file).
+  separation of responsibilities (e.g. hardcoded credentials, SQL injection, a credential
+  that's accepted but never verified, a God Class mixing DB + business logic + routing in
+  one file).
 - **HIGH** — strong MVC/SOLID violations that make testing and maintenance hard (heavy
   business logic trapped in controllers, tight coupling with no dependency injection,
   mutable global state).
@@ -46,6 +47,22 @@ const config = { dbPass: "senha_super_secreta_prod_123", paymentGatewayKey: "pk_
 Also flag a secret echoed back in an API response (e.g. a `/health` endpoint that returns
 `secret_key` in its JSON) — that's the same anti-pattern with an even worse blast radius.
 
+**A literal fallback is the same finding.** Reading the variable from the environment
+doesn't help if a fixed literal takes over when it's missing — the literal is still in
+source, and "variable not set" is the out-of-the-box state. Flag these exactly like a
+direct assignment, even when the literal is labeled as dev-only:
+```python
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-not-for-production")
+SECRET_KEY = os.getenv("SECRET_KEY") or "change-me"
+```
+```javascript
+const jwtSecret = process.env.JWT_SECRET || "dev-secret";
+```
+The same goes for a `.env.example` whose placeholder is a usable value (e.g.
+`SECRET_KEY=change-me-to-a-long-random-value`) that the app would accept as-is when copied —
+every install that skips editing it shares the same public key. When this secret signs
+tokens/sessions, anyone who reads the repo can forge them (including for admin users).
+
 **Why CRITICAL:** anyone with read access to the repo (or a leaked response body) gets
 production credentials.
 
@@ -79,6 +96,37 @@ operation, reachable with no authentication or authorization check at all.
 **Why CRITICAL:** this is a complete authorization bypass on top of whatever else is
 wrong with the query itself — treat it as its own finding even when it overlaps with
 finding #3.
+
+---
+
+## 15. Authentication Bypass / Credential Not Verified — CRITICAL
+
+Numbered 15 so existing references keep their numbers, but it belongs with the CRITICAL
+security entries above — check it in the same pass as #2–#4.
+
+**Signal:** a flow receives a credential (password, PIN, token, API key) and then reaches
+the protected action on at least one code path **without checking it**. Trace every
+branch of each flow that takes a credential, not just the happy path. Typical shapes:
+- "find or create" on an identity: when the account doesn't exist it's created with the
+  submitted password; when it **does** exist the code just reuses it and proceeds —
+  the submitted password is never compared with the stored hash:
+  ```javascript
+  let user = await users.findByEmail(email);
+  if (!user) user = await users.create({ email, passwordHash: await hash(password) });
+  await charge(card); await enroll(user.id, courseId);   // existing user: password ignored
+  ```
+- a login that looks the user up by email/username and issues a session/token without
+  comparing the password, or compares it with `==` against a plaintext column;
+- a verify function (`verifyPassword`, `check_password_hash`, `bcrypt.compare`) that is
+  defined/imported but never called on the path that needs it;
+- a token that's issued but never validated (decorative `'fake-jwt-' + id`), or validated
+  only on some of the routes that require it.
+
+**Why CRITICAL:** it's a full authentication bypass — anyone who knows (or guesses) an
+identifier such as an email can act as that account. It's easy to miss because the
+credential *is* collected and even hashed on another branch, so the code looks
+authenticated at a glance. A refactor that keeps this path intact carries the CRITICAL
+into the new structure.
 
 ---
 
