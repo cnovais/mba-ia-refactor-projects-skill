@@ -541,7 +541,7 @@ Na prática, a prova real foi copiar a pasta `.claude/skills/refactor-arch/` sem
 ### Desafios encontrados
 
 - **Projeto parcialmente organizado (task-manager-api) exigia comportamento diferente do monolito.** Se a skill simplesmente reescrevesse tudo do zero toda vez, ela apagaria a separação de camadas que o projeto 3 já tinha. Resolvi adicionando uma instrução explícita na Fase 3 ("respeite o que já está bom, melhore em vez de reescrever do zero") e desenhando as receitas do playbook como itens independentes, aplicáveis um a um — só entra em ação a receita que aquele projeto específico realmente precisa.
-- **Um dos CRITICAL do projeto 2 não dava pra fechar sem mudar o contrato da API — e a primeira tentativa errou a mão nisso.** As rotas de admin do `ecommerce-api-legacy` não tinham nenhuma autenticação, e o arquivo `api.http` original (usado como fonte de verdade dos endpoints) também não manda nenhuma credencial. Na primeira versão, a skill implementou um middleware `adminAuth` opt-in que deixava a rota **aberta** sem `ADMIN_API_KEY` configurada — ou seja, exatamente o estado padrão do `.env.example`/README — e documentou isso como "mitigado". Em revisão posterior ficou claro que isso não fecha o finding, só o esconde: o CRITICAL continuava 100% reproduzível em qualquer instalação seguindo o próprio README. Corrigido para falhar fechado (sem a chave, a rota responde 403 em vez de abrir), no mesmo padrão já usado pelo `/admin/reset-db` do `code-smells-project`; `api.http` foi ajustado para enviar a credencial e o playbook da skill (`05-refactoring-playbook.md`, item 4) ganhou a regra explícita — detalhes na seção "Correção — 2026-09-20" de [`reports/audit-project-2.md`](./reports/audit-project-2.md).
+- **Gate de admin do projeto 2 precisa falhar fechado.** As rotas de admin do `ecommerce-api-legacy` não tinham nenhuma autenticação, e o `api.http` original não manda credencial nenhuma. A tentação era criar um gate opt-in (aberto quando o secret não está configurado) para não quebrar esse contrato — mas isso só esconde o CRITICAL, porque o estado padrão do `.env.example` é justamente sem secret. A skill agora trata isso como regra: o playbook (`05-refactoring-playbook.md`, item 4) exige gate **fail-closed**, o `SKILL.md` obriga a subir a aplicação **sem** o secret na validação da Fase 3 e chamar cada rota protegida esperando 401/403, e o `06-validation-checklist.md` tem um item dedicado a isso. Resultado no projeto 2 (skill reexecutada do zero sobre o código legado): middleware `src/middlewares/adminAuth.js` lendo `ADMIN_TOKEN` (header `x-admin-token`); **sem `ADMIN_TOKEN` definido, `GET /api/admin/financial-report` e `DELETE /api/users/:id` respondem 403** — mesmo padrão do `/admin/reset-db` do `code-smells-project`.
 - **Ambiente local batendo com a stack (porta 5000 e AirPlay no macOS).** Na validação de um dos projetos a porta padrão do Flask conflitava com o AirPlay Receiver do macOS. Não é um problema da skill, mas precisou ficar documentado no relatório (porta alternativa usada na validação) pra não parecer que a aplicação não subiu.
 - **Achar o equilíbrio certo pra não inflar severidade.** No começo dos testes a tentação era marcar tudo que "parecia ruim" como CRITICAL. O catálogo acabou ganhando uma frase direta ("don't inflate — a bad variable name is LOW, not MEDIUM, even if you found a lot of them") justamente pra manter o relatório útil e a distribuição de severidade honesta nos três projetos.
 
@@ -615,7 +615,7 @@ O checklist completo (Fase 1, 2 e 3) foi preenchido pela própria skill dentro d
 | 2 — ecommerce-api-legacy | ✅ 4/4 | ✅ 6/6 | ✅ 9/9 |
 | 3 — task-manager-api | ✅ 4/4 | ✅ 6/6 | ✅ 9/9 |
 
-No projeto 2, um item foi inicialmente marcado como mitigado em vez de fechado por padrão (o gate de admin ficava aberto sem `ADMIN_API_KEY` configurada, para não quebrar o contrato original de `api.http`) — documentado explicitamente no relatório em vez de simplesmente marcado como resolvido, mas essa mitigação foi apontada em revisão posterior como insuficiente (o gate abria exatamente no estado padrão do `.env.example`) e corrigida para falhar fechado em 2026-09-20 (ver seção "Correção" em [`reports/audit-project-2.md`](./reports/audit-project-2.md)). No projeto 3, três pontos que a skill inicialmente havia deixado registrados como pendentes (autenticação/autorização real, `NotificationService` nunca chamado, e o campo `password` vazando na resposta da API) foram corrigidos numa segunda rodada, a pedido explícito, e revalidados via `curl` (rotas protegidas retornando 401/403 corretamente, notificação assíncrona confirmada em log).
+No projeto 2, o item *"Gates de autenticação falham fechados sem o secret configurado"* foi marcado só depois de subir a aplicação sem `ADMIN_TOKEN` (estado padrão do `.env.example`) e confirmar 403 nas duas rotas administrativas. No projeto 3, três pontos que a skill inicialmente havia deixado registrados como pendentes (autenticação/autorização real, `NotificationService` nunca chamado, e o campo `password` vazando na resposta da API) foram corrigidos numa segunda rodada, a pedido explícito, e revalidados via `curl` (rotas protegidas retornando 401/403 corretamente, notificação assíncrona confirmada em log).
 
 ### Aplicações rodando após a refatoração
 
@@ -689,6 +689,11 @@ curl http://localhost:5000/produtos
 # Projeto 2
 cd ecommerce-api-legacy && node src/app.js
 curl http://localhost:3000/api/courses    # ver api.http para os demais endpoints
+# rotas de admin falham fechadas: sem ADMIN_TOKEN no ambiente, ambas devem responder 403
+curl -i http://localhost:3000/api/admin/financial-report          # 403
+curl -i -X DELETE http://localhost:3000/api/users/1               # 403
+# com ADMIN_TOKEN=segredo node src/app.js:
+curl -i -H "x-admin-token: segredo" http://localhost:3000/api/admin/financial-report   # 200
 
 # Projeto 3
 cd task-manager-api && python app.py
@@ -698,44 +703,41 @@ curl http://localhost:5000/tasks
 3. **Checar que nenhum segredo continua hardcoded** — `grep -rn "SECRET_KEY\s*=\s*['\"]" .` e equivalentes não devem mais retornar literais no código-fonte de nenhum dos três projetos, só leitura de variável de ambiente (ver `config/settings.py` / `src/config/index.js` e os respectivos `.env.example`).
 4. **Rodar de novo a Fase 2 (auditoria) sobre o código já refatorado** é a forma mais direta de confirmar que os findings da rodada anterior não aparecem mais — os relatórios em `reports/` já documentam esse re-scan feito pela própria skill ao final da Fase 3, projeto a projeto.
 
-## Correção pós-entrega — 2026-09-20
+## Correção pós-entrega — gates de autenticação fail-closed (`ecommerce-api-legacy`)
 
-Recebi um comentário de revisão apontando que o `adminAuth` do `ecommerce-api-legacy`
-liberava `GET /api/admin/financial-report` e `DELETE /api/users/:id` sem nenhuma
-checagem quando `ADMIN_API_KEY` não estava definida — exatamente o estado padrão
-deixado pelo `.env.example` e pelo passo a passo deste README — fazendo o CRITICAL
-"Unauthenticated Admin/Destructive Endpoints" do `reports/audit-project-2.md`
-continuar reproduzível no cenário padrão, apesar de o relatório original descrever
-isso como "mitigado".
+**Estado atual (commit mais recente de `main`):** as rotas `GET /api/admin/financial-report`
+e `DELETE /api/users/:id` passam pelo middleware
+[`src/middlewares/adminAuth.js`](./ecommerce-api-legacy/src/middlewares/adminAuth.js), que
+**nega (403) quando `ADMIN_TOKEN` não está configurado** — o estado padrão do
+[`.env.example`](./ecommerce-api-legacy/.env.example) — e também quando o header
+`x-admin-token` está ausente ou errado. Não existe caminho em que a rota abra por falta de
+configuração:
 
-O comentário estava correto e já foi corrigido nesta entrega: o gate agora falha
-fechado (sem `ADMIN_API_KEY`, as rotas respondem `403` em vez de abrir), no mesmo
-padrão já usado pelo `/admin/reset-db` do `code-smells-project`. O playbook da skill
-(`05-refactoring-playbook.md`, item 4) foi atualizado nas 3 cópias com essa regra
-explícita, para não regredir em execuções futuras. Detalhes completos, evidência de
-validação (curl) e o antes/depois do middleware estão na seção "Desafios encontrados"
-acima e na seção "Correção — 2026-09-20" de [`reports/audit-project-2.md`](./reports/audit-project-2.md).
-PR: [#1](https://github.com/cnovais/mba-ia-refactor-projects-skill/pull/1).
+```js
+if (!config.adminToken || token !== config.adminToken) {
+    return res.status(403).json({ error: 'Não autorizado' });
+}
+```
 
-## Correção pós-entrega (2ª revisão) — 2026-09-27
+O que mudou em resposta às revisões:
 
-A segunda revisão repetiu o mesmo apontamento e pediu explicitamente para **ajustar o
-playbook e rodar a skill de novo** nesse projeto, já que a primeira correção tinha sido
-um patch manual no código já refatorado. Desta vez:
-
-1. **Skill reforçada (3 cópias, idênticas):** além da regra de fail-closed no playbook
-   (`05-refactoring-playbook.md`, item 4), o passo de validação da Fase 3 no `SKILL.md`
-   agora obriga a subir a aplicação **sem** o secret de auth configurado (estado padrão do
-   `.env.example`) e chamar cada rota protegida sem credencial, que precisa ser negada
-   (401/403). O `06-validation-checklist.md` ganhou o item *"Gates de autenticação falham
-   fechados sem o secret configurado (401/403, testado em runtime)"*, que só pode ser
-   marcado depois do teste em runtime.
-2. **Skill executada do zero:** o `ecommerce-api-legacy` foi restaurado ao código legado
-   original (commit inicial), a skill atualizada rodou as 3 fases (com o gate de
-   confirmação respondido antes da Fase 3), e o resultado substituiu o código do projeto e
-   o [`reports/audit-project-2.md`](./reports/audit-project-2.md). A variável agora se
-   chama `ADMIN_TOKEN` (header `x-admin-token`), como a skill gerou.
-3. **Revalidação independente (curl):**
+1. **Playbook ajustado (3 cópias idênticas da skill):** `05-refactoring-playbook.md`, item 4,
+   exige que todo gate de autenticação falhe fechado quando o secret estiver ausente, com
+   exemplo errado (opt-in) e certo (fail-closed) — o mesmo padrão do `/admin/reset-db` do
+   `code-smells-project`.
+2. **Validação obrigatória em runtime:** o passo de validação da Fase 3 no `SKILL.md` obriga
+   a subir a aplicação **sem** o secret e chamar cada rota protegida sem credencial,
+   esperando 401/403; o `06-validation-checklist.md` ganhou o item *"Gates de autenticação
+   falham fechados sem o secret configurado (401/403, testado em runtime)"*.
+3. **Skill reexecutada no projeto:** o `ecommerce-api-legacy` foi restaurado ao código legado
+   original, a skill atualizada rodou as 3 fases e o resultado substituiu o código e o
+   [`reports/audit-project-2.md`](./reports/audit-project-2.md) (ver seção *Validation*).
+   A variável gerada nessa execução chama `ADMIN_TOKEN` (não existe mais `ADMIN_API_KEY` no
+   código), e o [`api.http`](./ecommerce-api-legacy/api.http) envia `x-admin-token`.
+4. **Revalidação (curl):**
    - Sem `ADMIN_TOKEN`: `GET /api/admin/financial-report` → 403, `DELETE /api/users/1` → 403
      (também com header vazio); `POST /api/checkout` → 200.
-   - Com `ADMIN_TOKEN` definido: sem header ou com header errado → 403; header correto → 200 nas duas rotas.
+   - Com `ADMIN_TOKEN` definido: sem header ou com header errado → 403; header correto → 200.
+
+PRs: [#1](https://github.com/cnovais/mba-ia-refactor-projects-skill/pull/1),
+[#2](https://github.com/cnovais/mba-ia-refactor-projects-skill/pull/2).
