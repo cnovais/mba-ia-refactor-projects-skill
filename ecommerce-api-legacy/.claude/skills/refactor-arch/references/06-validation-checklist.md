@@ -39,6 +39,8 @@ Use this exact structure:
 - [ ] Aplicação inicia sem erros
 - [ ] Endpoints originais respondem corretamente
 - [ ] Gates de autenticação falham fechados sem o secret configurado (401/403, testado em runtime)
+- [ ] Nenhum segredo com valor padrão fixo no código (sem a variável, a aplicação não sobe ou usa chave aleatória — testado em runtime)
+- [ ] Credenciais verificadas em todos os caminhos (credencial errada para conta existente → 401/403, testado em runtime)
 ```
 
 ## How to fill each box honestly
@@ -76,6 +78,18 @@ actually happened is worse than no checklist.
     credentials. Reading the middleware code is not enough — run the request. If the
     project has no auth gate at all (none existed and the refactor added none), mark it
     `[x]` with "(N/A — nenhum gate de autenticação no projeto)".
+  - "Nenhum segredo com valor padrão fixo no código" — check it only after (a) grepping the
+    config module(s) for any secret read with a literal fallback
+    (`environ.get("X", "...")`, `getenv("X") or "..."`, `process.env.X || "..."`) and finding
+    none, and (b) booting the app with each secret **unset** and seeing it either refuse to
+    start with a clear error or log that it generated a random value. Also confirm
+    `.env.example` leaves secret values empty. If the project has no secrets at all, mark it
+    `[x]` with "(N/A — nenhum segredo no projeto)".
+  - "Credenciais verificadas em todos os caminhos" — check it only after calling every flow
+    that takes a credential (login, checkout with password, token-protected routes) with a
+    **wrong** credential for an **existing** account (and with a forged/garbage token) and
+    seeing 401/403 with no side effect, plus the correct credential still succeeding. If no
+    flow takes a credential, mark it `[x]` with "(N/A — nenhum fluxo recebe credencial)".
 
 
 ## Appending to the report file

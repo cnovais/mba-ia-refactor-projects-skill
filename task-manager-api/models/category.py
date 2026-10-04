@@ -1,15 +1,17 @@
-from database import db
-from utils.helpers import format_date, utc_now
+from database import BaseModel, db
+from utils.helpers import utcnow
+
+DEFAULT_COLOR = '#000000'
 
 
-class Category(db.Model):
+class Category(BaseModel):
     __tablename__ = 'categories'
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     description = db.Column(db.String(300), nullable=True)
-    color = db.Column(db.String(7), default='#000000')
-    created_at = db.Column(db.DateTime, default=utc_now)
+    color = db.Column(db.String(7), default=DEFAULT_COLOR)
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     def to_dict(self):
         return {
@@ -17,5 +19,5 @@ class Category(db.Model):
             'name': self.name,
             'description': self.description,
             'color': self.color,
-            'created_at': format_date(self.created_at),
+            'created_at': str(self.created_at),
         }

@@ -1,19 +1,26 @@
-module.exports = function userModel(db) {
-    return {
-        findByEmail(email) {
-            return db.get('SELECT id, name, email FROM users WHERE email = ?', [email]);
-        },
+class UserModel {
+    constructor(db) {
+        this.db = db;
+    }
 
-        findById(id) {
-            return db.get('SELECT id, name, email FROM users WHERE id = ?', [id]);
-        },
+    findById(id) {
+        return this.db.get('SELECT id, name, email FROM users WHERE id = ?', [id]);
+    }
 
-        create({ name, email, passwordHash }) {
-            return db.run('INSERT INTO users (name, email, pass) VALUES (?, ?, ?)', [name, email, passwordHash]);
-        },
+    // Inclui o hash da senha: uso restrito à verificação de credenciais.
+    findByEmailWithPassword(email) {
+        return this.db.get('SELECT id, name, email, pass AS passwordHash FROM users WHERE email = ?', [email]);
+    }
 
-        deleteById(id) {
-            return db.run('DELETE FROM users WHERE id = ?', [id]);
-        },
-    };
-};
+    async create({ name, email, passwordHash }) {
+        const { lastID } = await this.db.run('INSERT INTO users (name, email, pass) VALUES (?, ?, ?)', [name, email, passwordHash]);
+        return lastID;
+    }
+
+    async deleteById(id) {
+        const { changes } = await this.db.run('DELETE FROM users WHERE id = ?', [id]);
+        return changes > 0;
+    }
+}
+
+module.exports = { UserModel };

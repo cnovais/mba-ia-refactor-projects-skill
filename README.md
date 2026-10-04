@@ -522,9 +522,9 @@ O `SKILL.md` foi pensado como um roteiro de execução, não como uma lista solt
 
 ### Catálogo de anti-patterns
 
-O catálogo tem 14 entradas, com severidade distribuída conforme a escala CRITICAL/HIGH/MEDIUM/LOW definida no enunciado:
+O catálogo tem 15 entradas, com severidade distribuída conforme a escala CRITICAL/HIGH/MEDIUM/LOW definida no enunciado:
 
-- **CRITICAL:** God Class/God Module, Credenciais Hardcoded, SQL Injection, Endpoint Perigoso Sem Autenticação
+- **CRITICAL:** God Class/God Module, Credenciais Hardcoded (incluindo valor fixo de fallback quando a variável não existe), SQL Injection, Endpoint Perigoso Sem Autenticação, Autenticação Pulada/Credencial Não Verificada
 - **HIGH:** Lógica de Negócio no Controller/Rota, Acoplamento Forte/Ausência de DI, Estado Global Mutável, Criptografia Caseira/Fraca
 - **MEDIUM:** N+1 Queries, Validação Ausente/Duplicada, Callback Hell, Tratamento de Erro Inconsistente/Silencioso
 - **LOW:** Nomenclatura Ruim/Magic Numbers
@@ -542,6 +542,7 @@ Na prática, a prova real foi copiar a pasta `.claude/skills/refactor-arch/` sem
 
 - **Projeto parcialmente organizado (task-manager-api) exigia comportamento diferente do monolito.** Se a skill simplesmente reescrevesse tudo do zero toda vez, ela apagaria a separação de camadas que o projeto 3 já tinha. Resolvi adicionando uma instrução explícita na Fase 3 ("respeite o que já está bom, melhore em vez de reescrever do zero") e desenhando as receitas do playbook como itens independentes, aplicáveis um a um — só entra em ação a receita que aquele projeto específico realmente precisa.
 - **Gate de admin do projeto 2 precisa falhar fechado.** As rotas de admin do `ecommerce-api-legacy` não tinham nenhuma autenticação, e o `api.http` original não manda credencial nenhuma. A tentação era criar um gate opt-in (aberto quando o secret não está configurado) para não quebrar esse contrato — mas isso só esconde o CRITICAL, porque o estado padrão do `.env.example` é justamente sem secret. A skill agora trata isso como regra: o playbook (`05-refactoring-playbook.md`, item 4) exige gate **fail-closed**, o `SKILL.md` obriga a subir a aplicação **sem** o secret na validação da Fase 3 e chamar cada rota protegida esperando 401/403, e o `06-validation-checklist.md` tem um item dedicado a isso. Resultado no projeto 2 (skill reexecutada do zero sobre o código legado): middleware `src/middlewares/adminAuth.js` lendo `ADMIN_TOKEN` (header `x-admin-token`); **sem `ADMIN_TOKEN` definido, `GET /api/admin/financial-report` e `DELETE /api/users/:id` respondem 403** — mesmo padrão do `/admin/reset-db` do `code-smells-project`.
+- **Recomendação aplicada pela metade e bypass que o catálogo não cobria.** Duas revisões apontaram falhas que a skill não pegava sozinha: (1) no `task-manager-api`, o relatório recomendava "sem fallback hardcoded" para a `SECRET_KEY`, mas a Fase 3 gerou `os.environ.get('SECRET_KEY', 'dev-secret-key-not-for-production')`. Como essa chave assina os tokens, quem lesse o repositório conseguia forjar um token de admin. (2) No `ecommerce-api-legacy`, o checkout de uma conta já existente não conferia a senha; a Análise Manual marcava isso como CRITICAL, mas o catálogo não tinha entrada para esse caso. A correção foi na skill, não no código: o catálogo passou a tratar fallback literal como segredo hardcoded e ganhou a entrada #15 (Autenticação Pulada/Credencial Não Verificada); o playbook proíbe valor fixo como padrão (ou a app não sobe, ou gera chave aleatória) e tem a receita de verificar credencial em todos os caminhos; e o `SKILL.md` e o checklist exigem testar os dois casos em runtime. Depois, a skill foi reexecutada do zero nos dois projetos.
 - **Ambiente local batendo com a stack (porta 5000 e AirPlay no macOS).** Na validação de um dos projetos a porta padrão do Flask conflitava com o AirPlay Receiver do macOS. Não é um problema da skill, mas precisou ficar documentado no relatório (porta alternativa usada na validação) pra não parecer que a aplicação não subiu.
 - **Achar o equilíbrio certo pra não inflar severidade.** No começo dos testes a tentação era marcar tudo que "parecia ruim" como CRITICAL. O catálogo acabou ganhando uma frase direta ("don't inflate — a bad variable name is LOW, not MEDIUM, even if you found a lot of them") justamente pra manter o relatório útil e a distribuição de severidade honesta nos três projetos.
 
@@ -552,8 +553,8 @@ Na prática, a prova real foi copiar a pasta `.claude/skills/refactor-arch/` sem
 | Projeto | CRITICAL | HIGH | MEDIUM | LOW | Total |
 |---|---|---|---|---|---|
 | 1 — code-smells-project | 4 | 4 | 4 | 3 | **15** |
-| 2 — ecommerce-api-legacy | 4 | 5 | 5 | 2 | **16** |
-| 3 — task-manager-api | 3 | 3 | 6 | 2 | **14** |
+| 2 — ecommerce-api-legacy | 5 | 5 | 5 | 1 | **16** |
+| 3 — task-manager-api | 4 | 4 | 9 | 4 | **21** |
 
 Relatórios completos em [`reports/audit-project-1.md`](./reports/audit-project-1.md), [`reports/audit-project-2.md`](./reports/audit-project-2.md) e [`reports/audit-project-3.md`](./reports/audit-project-3.md).
 
@@ -584,8 +585,10 @@ src/utils.js                   db/connection.js
                                 models/{user,course,enrollment,payment,auditLog,report}Model.js
                                 controllers/{checkout,financialReport,user}Controller.js
                                 routes/{checkout,financialReport,user}Routes.js
+                                db/{connection,schema}.js
+                                validators/{checkoutValidator,common}.js
                                 middlewares/{adminAuth,asyncHandler,errorHandler}.js
-                                utils/{cache,password,paymentGateway}.js
+                                utils/{cache,password,paymentGateway,httpError}.js
 ```
 
 **Projeto 3 — task-manager-api**
@@ -596,8 +599,8 @@ app.py                          app.py
 database.py                     config/settings.py
 models/ (misturado com regra)   models/{task,user,category}.py (só persistência/invariantes)
 routes/ (com lógica de negócio) controllers/{task,user,category,report}_controller.py
-services/                       routes/{task,user,category,report}_routes.py (roteamento fino)
-utils/                          validators/{task,user,category}_validator.py
+services/                       routes/{task,user,category,report,health}_routes.py (roteamento fino)
+utils/                          validators/{common,task,user,category}_validator.py
                                  auth/{decorators,tokens}.py
                                  middlewares/error_handler.py
                                  errors.py (ApiError central)
@@ -611,11 +614,13 @@ O checklist completo (Fase 1, 2 e 3) foi preenchido pela própria skill dentro d
 
 | Projeto | Fase 1 | Fase 2 | Fase 3 |
 |---|---|---|---|
-| 1 — code-smells-project | ✅ 4/4 | ✅ 6/6 | ✅ 9/9 |
-| 2 — ecommerce-api-legacy | ✅ 4/4 | ✅ 6/6 | ✅ 9/9 |
-| 3 — task-manager-api | ✅ 4/4 | ✅ 6/6 | ✅ 9/9 |
+| 1 — code-smells-project | ✅ 4/4 | ✅ 6/6 | ✅ 9/9 ¹ |
+| 2 — ecommerce-api-legacy | ✅ 4/4 | ✅ 6/6 | ✅ 12/12 |
+| 3 — task-manager-api | ✅ 4/4 | ✅ 6/6 | ✅ 12/12 |
 
-No projeto 2, o item *"Gates de autenticação falham fechados sem o secret configurado"* foi marcado só depois de subir a aplicação sem `ADMIN_TOKEN` (estado padrão do `.env.example`) e confirmar 403 nas duas rotas administrativas. No projeto 3, três pontos que a skill inicialmente havia deixado registrados como pendentes (autenticação/autorização real, `NotificationService` nunca chamado, e o campo `password` vazando na resposta da API) foram corrigidos numa segunda rodada, a pedido explícito, e revalidados via `curl` (rotas protegidas retornando 401/403 corretamente, notificação assíncrona confirmada em log).
+¹ O projeto 1 foi executado antes de o checklist ganhar os itens de fail-closed, segredo sem fallback e verificação de credencial, e não foi reexecutado. Ele já atende os três: `/admin/reset-db` nega sem `ADMIN_TOKEN`, e a `SECRET_KEY` gera um valor aleatório por processo quando não está definida.
+
+Nos projetos 2 e 3, os três itens de segurança da Fase 3 (gate fail-closed, segredo sem valor fixo de fallback e credencial verificada em todos os caminhos) só foram marcados depois de testes em runtime: subir a aplicação sem os secrets (estado padrão do `.env.example`), chamar as rotas protegidas sem credencial e chamar os fluxos que recebem senha/token com credencial errada para uma conta existente. Os resultados estão na seção de correção pós-entrega abaixo.
 
 ### Aplicações rodando após a refatoração
 
@@ -687,8 +692,11 @@ cd code-smells-project && python app.py
 curl http://localhost:5000/produtos
 
 # Projeto 2
-cd ecommerce-api-legacy && node src/app.js
-curl http://localhost:3000/api/courses    # ver api.http para os demais endpoints
+cd ecommerce-api-legacy && PAYMENT_GATEWAY_KEY=pk_test_x node src/app.js   # sem a chave, a app não sobe
+# ver api.http para os demais endpoints
+# checkout com senha errada para conta existente (seed) → 401
+curl -i -X POST http://localhost:3000/api/checkout -H 'Content-Type: application/json' \
+  -d '{"usr":"X","eml":"leonan@fullcycle.com.br","pwd":"errada","c_id":1,"card":"4111111111111111"}'
 # rotas de admin falham fechadas: sem ADMIN_TOKEN no ambiente, ambas devem responder 403
 curl -i http://localhost:3000/api/admin/financial-report          # 403
 curl -i -X DELETE http://localhost:3000/api/users/1               # 403
@@ -696,11 +704,17 @@ curl -i -X DELETE http://localhost:3000/api/users/1               # 403
 curl -i -H "x-admin-token: segredo" http://localhost:3000/api/admin/financial-report   # 200
 
 # Projeto 3
-cd task-manager-api && python app.py
-curl http://localhost:5000/tasks
+cd task-manager-api
+python app.py                     # sem SECRET_KEY: "Configuration error: SECRET_KEY environment variable is required"
+export SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))")
+python seed.py && python app.py
+curl -i http://localhost:5000/tasks                                    # 401 sem token
+curl -s -X POST http://localhost:5000/login -H 'Content-Type: application/json' \
+  -d '{"email":"joao@email.com","password":"1234"}'                     # 200 + token
+# use o token em: curl -H "Authorization: Bearer <token>" http://localhost:5000/tasks
 ```
 
-3. **Checar que nenhum segredo continua hardcoded** — `grep -rn "SECRET_KEY\s*=\s*['\"]" .` e equivalentes não devem mais retornar literais no código-fonte de nenhum dos três projetos, só leitura de variável de ambiente (ver `config/settings.py` / `src/config/index.js` e os respectivos `.env.example`).
+3. **Checar que nenhum segredo continua hardcoded** — `grep -rnE "environ.get\(['\"]SECRET_KEY['\"], *['\"]|SECRET_KEY\s*=\s*['\"]" .` e equivalentes (incluindo fallback literal) não devem mais retornar literais no código-fonte de nenhum dos três projetos, só leitura de variável de ambiente (ver `config/settings.py` / `src/config/index.js` e os respectivos `.env.example`).
 4. **Rodar de novo a Fase 2 (auditoria) sobre o código já refatorado** é a forma mais direta de confirmar que os findings da rodada anterior não aparecem mais — os relatórios em `reports/` já documentam esse re-scan feito pela própria skill ao final da Fase 3, projeto a projeto.
 
 ## Correção pós-entrega — gates de autenticação fail-closed (`ecommerce-api-legacy`)
@@ -741,3 +755,47 @@ O que mudou em resposta às revisões:
 
 PRs: [#1](https://github.com/cnovais/mba-ia-refactor-projects-skill/pull/1),
 [#2](https://github.com/cnovais/mba-ia-refactor-projects-skill/pull/2).
+
+## Correção pós-entrega (3ª revisão) — 2026-10-03
+
+A terceira revisão apontou dois pontos, ambos confirmados antes da correção:
+
+- **`task-manager-api`:** `config/settings.py:23` usava `dev-secret-key-not-for-production`
+  quando `SECRET_KEY` não existia. Essa chave assina os tokens em `auth/tokens.py`, então
+  dava para forjar um token de admin lendo o repositório.
+- **`ecommerce-api-legacy`:** o checkout de um email já cadastrado seguia para pagamento e
+  matrícula sem conferir a senha (reproduzido: senha errada → 200 e matrícula criada). A
+  Análise Manual marcava isso como CRITICAL, mas o catálogo não cobria o caso e o relatório
+  não o listava.
+
+O que mudou:
+
+1. **Skill (3 cópias idênticas):**
+   - `02-antipattern-catalog.md`: o item #2 passou a tratar fallback literal
+     (`environ.get("X", "...")`, `process.env.X || "..."`) e placeholder utilizável no
+     `.env.example` como segredo hardcoded. Entrou o item #15, **Authentication Bypass /
+     Credential Not Verified** (CRITICAL), com o padrão "find or create" que reaproveita a
+     conta existente sem verificar a senha.
+   - `05-refactoring-playbook.md`: a receita #2 proíbe valor fixo como padrão (a app não sobe
+     ou gera chave aleatória por processo) e manda deixar os secrets vazios no
+     `.env.example`. A nova receita #15 exige verificar a credencial em todos os caminhos,
+     antes de qualquer efeito colateral.
+   - `SKILL.md` e `06-validation-checklist.md`: a Fase 3 agora sobe a app sem cada secret e
+     chama os fluxos com credencial errada para conta existente. O checklist ganhou dois
+     itens que só podem ser marcados depois desses testes em runtime.
+2. **Skill reexecutada do zero:** `task-manager-api` e `ecommerce-api-legacy` foram restaurados
+   ao código legado original. A skill rodou as 3 fases (gate respondido com `y`) e o resultado
+   substituiu o código e os relatórios [`audit-project-2.md`](./reports/audit-project-2.md)
+   (16 findings, agora com o bypass do checkout como CRITICAL) e
+   [`audit-project-3.md`](./reports/audit-project-3.md) (21 findings).
+3. **Revalidação independente:**
+   - `task-manager-api` sem `SECRET_KEY` → não sobe (exit 1, erro nomeando a variável);
+     nenhum secret com fallback literal em `config/`; `.env.example` com `SECRET_KEY=` vazio.
+   - `task-manager-api` com `SECRET_KEY`: login com senha certa → 200, senha errada → 401;
+     token assinado com a chave antiga `dev-secret-key-not-for-production` → 401; sem token → 401.
+   - `ecommerce-api-legacy` sem `PAYMENT_GATEWAY_KEY` → não sobe; checkout de conta nova → 200,
+     mesma conta com senha certa → 200, senha errada → 401 (sem matrícula nem pagamento),
+     conta do seed com senha chutada → 401; rotas de admin sem `ADMIN_TOKEN` → 403.
+   - `code-smells-project` não foi reexecutado: ele já não tinha fallback literal (a
+     `SECRET_KEY` gera valor aleatório quando ausente) nem fluxo com credencial não verificada.
+

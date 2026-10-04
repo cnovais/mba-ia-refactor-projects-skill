@@ -1,134 +1,99 @@
 from datetime import timedelta
 
-from sqlalchemy import func
-
-from database import db
-from errors import ApiError
+from errors import NotFoundError
 from models.category import Category
-from models.task import Task
+from models.task import (
+    HIGH_PRIORITY_THRESHOLD,
+    PRIORITY_LABELS,
+    STATUS_CANCELLED,
+    STATUS_DONE,
+    STATUS_IN_PROGRESS,
+    STATUS_PENDING,
+    Task,
+)
 from models.user import User
-from utils.helpers import PRIORITY_LABELS, calculate_percentage, utc_now
+from utils.helpers import calculate_percentage, utcnow
+
+RECENT_ACTIVITY_DAYS = 7
+
+
+def _status_breakdown(by_status):
+    return {
+        STATUS_PENDING: by_status.get(STATUS_PENDING, 0),
+        STATUS_IN_PROGRESS: by_status.get(STATUS_IN_PROGRESS, 0),
+        STATUS_DONE: by_status.get(STATUS_DONE, 0),
+        STATUS_CANCELLED: by_status.get(STATUS_CANCELLED, 0),
+    }
 
 
 def summary_report():
-    total_tasks = Task.query.count()
-    total_users = User.query.count()
-    total_categories = Category.query.count()
+    now = utcnow()
+    since = now - timedelta(days=RECENT_ACTIVITY_DAYS)
 
-    status_counts = dict(
-        db.session.query(Task.status, func.count(Task.id)).group_by(Task.status).all()
-    )
-    priority_counts = dict(
-        db.session.query(Task.priority, func.count(Task.id)).group_by(Task.priority).all()
-    )
+    by_priority = Task.count_by_priority()
+    overdue_tasks = Task.list_overdue(now)
+    completion = Task.completion_by_user()
 
-    now = utc_now()
-    overdue_tasks = Task.query.filter(
-        Task.due_date < now,
-        Task.status.notin_(['done', 'cancelled']),
-    ).all()
-    overdue_list = [
-        {
-            'id': task.id,
-            'title': task.title,
-            'due_date': str(task.due_date),
-            'days_overdue': (now - task.due_date).days,
-        }
-        for task in overdue_tasks
-    ]
-
-    seven_days_ago = now - timedelta(days=7)
-    recent_tasks = Task.query.filter(Task.created_at >= seven_days_ago).count()
-    recent_done = Task.query.filter(
-        Task.status == 'done',
-        Task.updated_at >= seven_days_ago,
-    ).count()
-
-    user_stats = _user_productivity_stats()
+    user_productivity = []
+    for user in User.list_all():
+        total, completed = completion.get(user.id, (0, 0))
+        user_productivity.append({
+            'user_id': user.id,
+            'user_name': user.name,
+            'total_tasks': total,
+            'completed_tasks': completed,
+            'completion_rate': calculate_percentage(completed, total),
+        })
 
     return {
         'generated_at': str(now),
         'overview': {
-            'total_tasks': total_tasks,
-            'total_users': total_users,
-            'total_categories': total_categories,
+            'total_tasks': Task.count(),
+            'total_users': User.count(),
+            'total_categories': Category.count(),
         },
-        'tasks_by_status': {
-            status: status_counts.get(status, 0)
-            for status in ('pending', 'in_progress', 'done', 'cancelled')
-        },
-        'tasks_by_priority': {
-            label: priority_counts.get(priority, 0)
-            for priority, label in PRIORITY_LABELS.items()
-        },
+        'tasks_by_status': _status_breakdown(Task.count_by_status()),
+        'tasks_by_priority': {label: by_priority.get(level, 0) for level, label in PRIORITY_LABELS.items()},
         'overdue': {
-            'count': len(overdue_list),
-            'tasks': overdue_list,
+            'count': len(overdue_tasks),
+            'tasks': [
+                {
+                    'id': task.id,
+                    'title': task.title,
+                    'due_date': str(task.due_date),
+                    'days_overdue': (now - task.due_date).days,
+                }
+                for task in overdue_tasks
+            ],
         },
         'recent_activity': {
-            'tasks_created_last_7_days': recent_tasks,
-            'tasks_completed_last_7_days': recent_done,
+            'tasks_created_last_7_days': Task.count_created_since(since),
+            'tasks_completed_last_7_days': Task.count_done_since(since),
         },
-        'user_productivity': user_stats,
+        'user_productivity': user_productivity,
     }
 
 
 def user_report(user_id):
-    user = db.session.get(User, user_id)
+    user = User.get_by_id(user_id)
     if not user:
-        raise ApiError('Usuário não encontrado', 404)
+        raise NotFoundError('Usuário não encontrado')
 
-    tasks = Task.query.filter_by(user_id=user_id).all()
-
+    now = utcnow()
+    tasks = Task.list_by_user(user_id)
+    by_status = {}
+    for task in tasks:
+        by_status[task.status] = by_status.get(task.status, 0) + 1
+    statuses = _status_breakdown(by_status)
     total = len(tasks)
-    done = sum(1 for task in tasks if task.status == 'done')
-    pending = sum(1 for task in tasks if task.status == 'pending')
-    in_progress = sum(1 for task in tasks if task.status == 'in_progress')
-    cancelled = sum(1 for task in tasks if task.status == 'cancelled')
-    high_priority = sum(1 for task in tasks if task.priority <= 2)
-    overdue = sum(1 for task in tasks if task.is_overdue())
 
     return {
-        'user': {
-            'id': user.id,
-            'name': user.name,
-            'email': user.email,
-        },
+        'user': {'id': user.id, 'name': user.name, 'email': user.email},
         'statistics': {
             'total_tasks': total,
-            'done': done,
-            'pending': pending,
-            'in_progress': in_progress,
-            'cancelled': cancelled,
-            'overdue': overdue,
-            'high_priority': high_priority,
-            'completion_rate': calculate_percentage(done, total),
+            **statuses,
+            'overdue': sum(1 for task in tasks if task.is_overdue(now)),
+            'high_priority': sum(1 for task in tasks if task.priority <= HIGH_PRIORITY_THRESHOLD),
+            'completion_rate': calculate_percentage(statuses[STATUS_DONE], total),
         },
     }
-
-
-def _user_productivity_stats():
-    # One query for totals, one for completed — instead of the original's
-    # one Task.query.filter_by(user_id=...) call per user (N+1).
-    totals = dict(
-        db.session.query(Task.user_id, func.count(Task.id)).group_by(Task.user_id).all()
-    )
-    completed = dict(
-        db.session.query(Task.user_id, func.count(Task.id))
-        .filter(Task.status == 'done')
-        .group_by(Task.user_id)
-        .all()
-    )
-
-    stats = []
-    for user in User.query.all():
-        total = totals.get(user.id, 0)
-        done = completed.get(user.id, 0)
-        stats.append({
-            'user_id': user.id,
-            'user_name': user.name,
-            'total_tasks': total,
-            'completed_tasks': done,
-            'completion_rate': calculate_percentage(done, total),
-        })
-    return stats

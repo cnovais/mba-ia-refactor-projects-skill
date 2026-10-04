@@ -1,13 +1,19 @@
-module.exports = function paymentModel(db) {
-    return {
-        create(enrollmentId, amount, status) {
-            return db.run('INSERT INTO payments (enrollment_id, amount, status) VALUES (?, ?, ?)', [enrollmentId, amount, status]);
-        },
+class PaymentModel {
+    constructor(db) {
+        this.db = db;
+    }
 
-        deleteByEnrollmentIds(enrollmentIds) {
-            if (enrollmentIds.length === 0) return Promise.resolve({ changes: 0 });
-            const placeholders = enrollmentIds.map(() => '?').join(',');
-            return db.run(`DELETE FROM payments WHERE enrollment_id IN (${placeholders})`, enrollmentIds);
-        },
-    };
-};
+    async create({ enrollmentId, amount, status }) {
+        const { lastID } = await this.db.run('INSERT INTO payments (enrollment_id, amount, status) VALUES (?, ?, ?)', [enrollmentId, amount, status]);
+        return lastID;
+    }
+
+    deleteByUserId(userId) {
+        return this.db.run(
+            'DELETE FROM payments WHERE enrollment_id IN (SELECT id FROM enrollments WHERE user_id = ?)',
+            [userId]
+        );
+    }
+}
+
+module.exports = { PaymentModel };

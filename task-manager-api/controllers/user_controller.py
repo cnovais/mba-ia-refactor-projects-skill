@@ -1,163 +1,104 @@
-import database
-from auth.tokens import generate_token
-from database import db
-from errors import ApiError
+import logging
+
+from auth.tokens import issue_token
+from errors import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
 from models.task import Task
-from models.user import User
-from utils.helpers import format_date, log_action
-from validators.user_validator import validate_user_payload
+from models.user import ROLE_USER, User
+from utils.helpers import utcnow
+from validators.user_validator import validate_login, validate_role, validate_user_create, validate_user_update
+
+logger = logging.getLogger(__name__)
+
+
+def _get_user_or_404(user_id):
+    user = User.get_by_id(user_id)
+    if not user:
+        raise NotFoundError('Usuário não encontrado')
+    return user
+
+
+def _ensure_email_available(email, current_user_id=None):
+    existing = User.find_by_email(email)
+    if existing and existing.id != current_user_id:
+        raise ConflictError('Email já cadastrado')
 
 
 def list_users():
-    users = User.query.all()
+    task_counts = Task.count_by_user()
     result = []
-    for user in users:
-        result.append({
-            'id': user.id,
-            'name': user.name,
-            'email': user.email,
-            'role': user.role,
-            'active': user.active,
-            'created_at': format_date(user.created_at),
-            'task_count': len(user.tasks),
-        })
+    for user in User.list_all():
+        data = user.to_dict()
+        data['task_count'] = task_counts.get(user.id, 0)
+        result.append(data)
     return result
 
 
 def get_user(user_id):
-    user = db.session.get(User, user_id)
-    if not user:
-        raise ApiError('Usuário não encontrado', 404)
-
+    user = _get_user_or_404(user_id)
     data = user.to_dict()
-    data['tasks'] = [task.to_dict() for task in Task.query.filter_by(user_id=user_id).all()]
+    data['tasks'] = [task.to_dict() for task in Task.list_by_user(user_id)]
     return data
 
 
-def create_user(data):
-    if not data:
-        raise ApiError('Dados inválidos')
+def create_user(data, current_user):
+    fields = validate_user_create(data)
+    _ensure_email_available(fields['email'])
+    validate_role(fields['role'])
+    if fields['role'] != ROLE_USER and not (current_user and current_user.is_admin()):
+        raise ForbiddenError('Apenas administradores podem atribuir este role')
 
-    cleaned, error = validate_user_payload(data, partial=False)
-    if error:
-        raise ApiError(error)
-
-    if User.query.filter_by(email=cleaned['email']).first():
-        raise ApiError('Email já cadastrado', 409)
-
-    user = User()
-    user.name = cleaned['name']
-    user.email = cleaned['email']
-    user.set_password(cleaned['password'])
-    user.role = cleaned['role']
-
-    db.session.add(user)
-    database.save()
-    log_action('Usuário criado', f'{user.id} - {user.name}')
+    user = User(name=fields['name'], email=fields['email'], role=fields['role'])
+    user.set_password(fields['password'])
+    user.save()
+    logger.info('Usuário criado: %s - %s', user.id, user.name)
     return user.to_dict()
 
 
-def update_user(user_id, data, acting_user=None):
-    user = db.session.get(User, user_id)
-    if not user:
-        raise ApiError('Usuário não encontrado', 404)
+def update_user(user_id, data, current_user):
+    user = _get_user_or_404(user_id)
+    if not current_user.is_admin() and current_user.id != user.id:
+        raise ForbiddenError('Acesso negado')
 
-    if not data:
-        raise ApiError('Dados inválidos')
+    changes = validate_user_update(data)
+    if ('role' in changes or 'active' in changes) and not current_user.is_admin():
+        raise ForbiddenError('Apenas administradores podem alterar role ou status')
+    if 'email' in changes:
+        _ensure_email_available(changes['email'], current_user_id=user.id)
 
-    is_admin_actor = bool(acting_user and acting_user.is_admin())
-    is_self = bool(acting_user and acting_user.id == user_id)
-
-    # Editing someone else's account (password, email, active flag, ...) is only
-    # for admins; editing your own is always allowed. Without this, any
-    # authenticated user could take over any other account via this endpoint —
-    # `login_required` alone only proves *someone* is logged in, not that they're
-    # allowed to touch *this* record.
-    if not (is_admin_actor or is_self):
-        raise ApiError('Você só pode editar o seu próprio usuário', 403)
-
-    cleaned, error = validate_user_payload(data, partial=True)
-    if error:
-        raise ApiError(error)
-
-    # Role is a privilege, not a regular profile field: only an admin may change it
-    # (this is the concrete use of User.is_admin() the audit's CRITICAL finding
-    # asked for — otherwise a user could promote themself to admin on their own
-    # account, which the self-or-admin check above would otherwise allow).
-    if 'role' in cleaned and not is_admin_actor:
-        raise ApiError('Apenas administradores podem alterar o role', 403)
-
-    if 'email' in cleaned:
-        existing = User.query.filter_by(email=cleaned['email']).first()
-        if existing and existing.id != user_id:
-            raise ApiError('Email já cadastrado', 409)
-        user.email = cleaned['email']
-
-    if 'name' in cleaned:
-        user.name = cleaned['name']
-    if 'password' in cleaned:
-        user.set_password(cleaned['password'])
-    if 'role' in cleaned:
-        user.role = cleaned['role']
-    if 'active' in cleaned:
-        user.active = cleaned['active']
-
-    database.save()
+    password = changes.pop('password', None)
+    if password is not None:
+        user.set_password(password)
+    for field, value in changes.items():
+        setattr(user, field, value)
+    user.save()
     return user.to_dict()
 
 
 def delete_user(user_id):
-    user = db.session.get(User, user_id)
-    if not user:
-        raise ApiError('Usuário não encontrado', 404)
-
-    for task in Task.query.filter_by(user_id=user_id).all():
-        db.session.delete(task)
-
-    db.session.delete(user)
-    database.save()
-    log_action('Usuário deletado', str(user_id))
+    user = _get_user_or_404(user_id)
+    Task.delete_by_user(user.id)
+    user.delete()
+    logger.info('Usuário deletado: %s', user_id)
+    return {'message': 'Usuário deletado com sucesso'}
 
 
 def get_user_tasks(user_id):
-    user = db.session.get(User, user_id)
-    if not user:
-        raise ApiError('Usuário não encontrado', 404)
-
-    tasks = Task.query.filter_by(user_id=user_id).all()
-    return [
-        {
-            'id': task.id,
-            'title': task.title,
-            'description': task.description,
-            'status': task.status,
-            'priority': task.priority,
-            'created_at': format_date(task.created_at),
-            'due_date': format_date(task.due_date),
-            'overdue': task.is_overdue(),
-        }
-        for task in tasks
-    ]
+    _get_user_or_404(user_id)
+    now = utcnow()
+    return [task.to_user_task_dict(now) for task in Task.list_by_user(user_id)]
 
 
 def login(data):
-    if not data:
-        raise ApiError('Dados inválidos')
+    email, password = validate_login(data)
 
-    email = data.get('email')
-    password = data.get('password')
-    if not email or not password:
-        raise ApiError('Email e senha são obrigatórios')
-
-    user = User.query.filter_by(email=email).first()
-    if not user or not user.check_password(password):
-        raise ApiError('Credenciais inválidas', 401)
-
+    user = User.authenticate(email, password)
+    if not user:
+        raise UnauthorizedError('Credenciais inválidas')
     if not user.active:
-        raise ApiError('Usuário inativo', 403)
+        raise ForbiddenError('Usuário inativo')
 
     return {
         'message': 'Login realizado com sucesso',
         'user': user.to_dict(),
-        'token': generate_token(user.id),
+        'token': issue_token(user),
     }

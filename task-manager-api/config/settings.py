@@ -1,36 +1,81 @@
-"""Central place for every secret, connection string, and environment-dependent
-value. Nothing outside this module should read `os.environ` directly.
-
-Values fall back to safe, clearly-marked development defaults so `python app.py`
-keeps working out of the box for local development (matching the project's README),
-but every value is overridable via a real environment variable / `.env` file, and
-none of them is a real secret committed to source control.
-"""
+"""Application settings. This is the only module that reads environment variables."""
 import os
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-load_dotenv()
+
+class ConfigError(RuntimeError):
+    """Raised when a required setting is missing or malformed."""
 
 
-def _bool_env(name, default):
+def _env(name):
     value = os.environ.get(name)
     if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _env_int(name, default):
+    value = _env(name)
+    if value is None:
         return default
-    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    try:
+        return int(value)
+    except ValueError:
+        raise ConfigError(f"{name} must be an integer, got {value!r}")
 
 
-SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-key-not-for-production')
+def _env_bool(name, default):
+    value = _env(name)
+    if value is None:
+        return default
+    return value.lower() in ('1', 'true', 'yes', 'on')
 
-DATABASE_URI = os.environ.get('DATABASE_URL', 'sqlite:///tasks.db')
 
-DEBUG = _bool_env('FLASK_DEBUG', True)
-HOST = os.environ.get('FLASK_HOST', '0.0.0.0')
-PORT = int(os.environ.get('FLASK_PORT', '5000'))
+def _env_list(name):
+    value = _env(name)
+    if value is None:
+        return ()
+    return tuple(item.strip() for item in value.split(',') if item.strip())
 
-SMTP_HOST = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
-SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
-SMTP_USER = os.environ.get('SMTP_USER', '')
-SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
 
-TOKEN_MAX_AGE_SECONDS = int(os.environ.get('TOKEN_MAX_AGE_SECONDS', str(60 * 60 * 24)))
+@dataclass(frozen=True)
+class Settings:
+    secret_key: str
+    database_url: str
+    token_max_age_seconds: int
+    cors_origins: tuple
+    debug: bool
+    host: str
+    port: int
+    smtp_host: str | None
+    smtp_port: int
+    smtp_user: str | None
+    smtp_password: str | None
+
+
+def load_settings():
+    load_dotenv()
+
+    secret_key = _env('SECRET_KEY')
+    if not secret_key:
+        raise ConfigError(
+            'SECRET_KEY environment variable is required. Generate one with: '
+            'python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+
+    return Settings(
+        secret_key=secret_key,
+        database_url=_env('DATABASE_URL') or 'sqlite:///tasks.db',
+        token_max_age_seconds=_env_int('TOKEN_MAX_AGE_SECONDS', 8 * 60 * 60),
+        cors_origins=_env_list('CORS_ORIGINS'),
+        debug=_env_bool('FLASK_DEBUG', False),
+        host=_env('HOST') or '127.0.0.1',
+        port=_env_int('PORT', 5000),
+        smtp_host=_env('SMTP_HOST'),
+        smtp_port=_env_int('SMTP_PORT', 587),
+        smtp_user=_env('SMTP_USER'),
+        smtp_password=_env('SMTP_PASSWORD'),
+    )

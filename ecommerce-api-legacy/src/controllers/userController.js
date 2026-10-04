@@ -1,21 +1,24 @@
-module.exports = function userController({ userModel, enrollmentModel, paymentModel }) {
-    return {
-        async deleteUser(req, res) {
-            const id = Number(req.params.id);
-            if (!Number.isInteger(id) || id <= 0) {
-                return res.status(400).json({ error: 'id inválido' });
-            }
+const { parsePositiveInt } = require('../validators/common');
+const { HttpError } = require('../utils/httpError');
 
-            // Cascade the delete instead of leaving orphaned enrollments/payments behind.
-            const enrollments = await enrollmentModel.findByUserId(id);
-            const enrollmentIds = enrollments.map((enrollment) => enrollment.id);
-            await paymentModel.deleteByEnrollmentIds(enrollmentIds);
-            await enrollmentModel.deleteByUserId(id);
-            const { changes } = await userModel.deleteById(id);
+function createUserController({ runInTransaction, userModel, enrollmentModel, paymentModel }) {
+    async function deleteUser(req, res) {
+        const userId = parsePositiveInt(req.params.id);
+        if (userId === null) throw new HttpError(400, 'Bad Request: id inválido');
 
-            if (changes === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
+        // Remove pagamentos e matrículas junto com o usuário, sem deixar órfãos.
+        const deleted = await runInTransaction(async () => {
+            if (!(await userModel.findById(userId))) return false;
+            await paymentModel.deleteByUserId(userId);
+            await enrollmentModel.deleteByUserId(userId);
+            return userModel.deleteById(userId);
+        });
 
-            res.json({ message: 'Usuário e dados relacionados removidos com sucesso' });
-        },
-    };
-};
+        if (!deleted) throw new HttpError(404, 'Usuário não encontrado');
+        res.send('Usuário deletado, junto com suas matrículas e pagamentos.');
+    }
+
+    return { deleteUser };
+}
+
+module.exports = { createUserController };
